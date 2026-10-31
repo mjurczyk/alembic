@@ -4,7 +4,7 @@ export class AlembicReader {
   container = null;
   archive = null;
 
-  // NOTE "archive" comes from the adapter. WTL-176 adds objects and properties for all containers.
+  // NOTE "archive" is an AlembicArchive. The container adapter makes it.
   async read(source) {
     if (!(source instanceof Uint8Array)) {
       throw new TypeError('AlembicReader source must be a Uint8Array.');
