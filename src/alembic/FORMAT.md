@@ -898,7 +898,15 @@ The C++ `getFloorIndex` clamps a time before `time(0)` to index 0, and a time af
 - then [2.8](#28-sample-index-mapping) to find the stored sample.
 - Blend two samples only if they have the same element count.
 
-**Check**: src `AbcCoreAbstract/TimeSampling.cpp:158-180`.
+The C++ reader uses a tolerance `kCHRONO_EPSILON = 1e-5` s. `/alembic` uses the same tolerance (**/alembic rule**):
+
+- floor: the last sample with `time(i) − t ≤ 1e-5`;
+- ceil: the floor sample if `|t − time(floor)| ≤ 1e-5`, else the next sample;
+- nearest: the floor or the next sample, the floor sample at equal distance.
+
+Uniform and cyclic sample times can be 1 ulp different from the C++ times (the libAlembic arm64 build uses fused multiply-add for `t[0] + i × timePerCycle`). Thus, at the exact middle between two samples, "nearest" can select the other sample.
+
+**Check**: src `AbcCoreAbstract/TimeSampling.cpp:54,158-370`, `Abc/ISampleSelector.cpp:44-68`; local (libAlembic `getFloorIndex`, `getCeilIndex`, `getNearIndex` and /alembic give the same indices for uniform, cyclic and acyclic test samplings, at `t`, `t ± 1e-7`, and between samples; one difference at an exact middle).
 
 ---
 
