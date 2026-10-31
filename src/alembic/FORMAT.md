@@ -25,9 +25,11 @@ All hex dumps come from these two files, in the repository root (they are not in
 | `demo-nonparticle.abc` | 2 305 723 951 | Blender 5.0.0, Alembic 1.8.3 | `/Cube` (Xform) → `Cube_241` (PolyMesh)                    |
 | `demo.abc`             | 2 506 108 821 | Blender 5.0.0, Alembic 1.8.3 | `/Cube` (Xform) → `Liquid` (Points), `Cube_241` (PolyMesh) |
 
-Both files have 250 samples per animated property at 1/24 s steps. The mesh changes topology on every frame. The `Cube_241` mesh has the same topology in both files: on all 250 frames, the `.faceIndices` and `.faceCounts` keys are equal. The values are not all equal: `P` differs by at most 2.4e-7 and `N` by at most 0.321 (77 of 250 frames differ), and `meshtype` is `0` in `demo-nonparticle.abc` and `1` in `demo.abc`.
+Both files have 250 samples for each property that changes over time. All of these use time sampling `[1]` (1/24 s steps), except `Pref`, which uses sampling `[0]` ([6.2](#62-pref-uses-time-sampling-0)). Each of the 250 `.faceIndices` samples is a different block, so the mesh topology is different on every frame. The `Cube_241` mesh has the same topology in both files: on all 250 frames, the `.faceIndices` and `.faceCounts` keys are equal. The other `Cube_241` values are not all equal. Frames that differ / largest difference: `P` 77 / 2.4e-7, `Pref` 77 / 3.58e-7, `N` 77 / 0.321, `.selfBnds` 2 / 1.19e-7. `meshtype` is `0` in `demo-nonparticle.abc` and `1` in `demo.abc`.
 
 Unless a dump says otherwise, offsets are from `demo-nonparticle.abc`.
+
+**Check**: demo (archive metadata; `abcls -r -l -t` (1.8.12); `numSamples` and `timeSamplingIndex` of all property headers; 250 unique `.faceIndices` blocks per file, and equal data never gets a second block ([2.11](#211-sample-keys-and-de-duplication)); key and value comparison of all `Cube_241` samples of the two files).
 
 ---
 
@@ -36,28 +38,31 @@ Unless a dump says otherwise, offsets are from `demo-nonparticle.abc`.
 ### 0.1 Conventions
 
 - All integers and floats are **little-endian**.
-- Data is **not aligned**. A `float32` array can start at an odd offset (for example `P` values at `0x3e9b`). Read with `DataView`, or copy a block before you make a typed array.
+- Data is **not aligned**. A `float32` array can start at an odd offset (for example `P` values at `0x3e9b`). A `Float32Array` view at an odd offset throws `RangeError`, and a `DataView` read works. `/alembic` reads with `DataView`, or copies a block before it makes a typed array (**/alembic rule**).
 - All offsets are **absolute** byte positions from the start of the file.
-- Offsets are 63-bit. Both demo files are larger than 2³¹ bytes, and their offsets go above `0x7fffffff`. Read offsets as `BigInt` and convert to `Number`. `Number` is exact up to `Number.MAX_SAFE_INTEGER` = 2⁵³ − 1.
+- Offsets are 63-bit. Both demo files are larger than 2³¹ bytes, and their offsets go above `0x7fffffff`. `/alembic` reads offsets as `BigInt` and converts them to `Number` (**/alembic rule**). `Number` is exact up to `Number.MAX_SAFE_INTEGER` = 2⁵³ − 1.
 - Strings in headers have a **length prefix**. They have no NUL terminator.
 - `u8`, `u16`, `u32`, `u64`, `i32`, `f64`: unsigned / signed integer and float widths.
 - `hint` integer: a `u8`, `u16` or `u32`. The property header _size hint_ selects the width (see [2.7](#27-property-headers)).
 - In hex dumps, `→` marks the decoded value.
 
+**Check**: src `Ogawa/OStream.cpp:170-174` (the writer refuses big-endian machines), `Ogawa/IStreams.cpp:676-680` (the reader refuses them), `AbcCoreOgawa/WriteUtil.cpp:465-510` (names and metadata have a size before them); local `node -e` on Node v20.9.0 (`new Float32Array(buffer, 1, 2)` throws `RangeError`, `DataView.getFloat32(1, true)` works, `Number.MAX_SAFE_INTEGER === 2**53 - 1`); demo (the walker uses all offsets as positions from byte 0 and accounts for every byte, [section 7](#7-byte-accounting)).
+
 ### 0.2 How each statement is checked
 
 Each subsection ends with a **Check** line. It gives the evidence for the statements in that subsection:
 
-- **src** `file:line`: Alembic C++ source, version 1.8.12, commit `2d54c7c2c3ba4dd9f30215c9663f0ea1aa8fd2a5`, path under `lib/Alembic/`.
-- **demo**: the walker script read both demo files with the rules in this document and tested the statement on all samples (all 250 frames), unless the line gives a smaller set.
+- **src** `file:line`: Alembic C++ source, version 1.8.12, commit `2d54c7c2c3ba4dd9f30215c9663f0ea1aa8fd2a5`, path under `lib/Alembic/`. Paths that start with `maya/` are under the repository root.
+- **demo**: checked on the demo files. The walker script (a research script, not in the repository, so these checks cannot be rerun from the repository) decodes every structure and every sample of both files with the rules in this document. It stops with an error when a rule does not fit (for example, when the number of property headers is not equal to the number of property groups, or when object headers do not end 32 bytes before the end of their block). The Check line names each extra test.
 - **ext**: a quote from an external page, URL in [section 8](#8-sources).
+- **local**: a test run on the author's machine, described in the Check line or in [section 8](#8-sources).
 - **/alembic rule**: a decision of this project. It is not a statement about other readers or writers.
 
 ---
 
 ## 1. Ogawa container
 
-Ogawa is a small binary tree format. The file has a 16-byte header, and then a tree of **groups** and **data blocks**. A group is a list of child offsets. A data block is a byte string. The Abc layer ([section 2](#2-abc-layer)) gives meaning to the tree.
+Ogawa is a binary tree format. The file has a 16-byte header, and then a tree of **groups** and **data blocks**. A group is a list of child offsets. A data block is a byte string. The Abc layer ([section 2](#2-abc-layer)) gives meaning to the tree.
 
 ### 1.1 File header (16 bytes, offset 0)
 
@@ -76,15 +81,15 @@ Ogawa is a small binary tree format. The file has a 16-byte header, and then a t
 ```
 
 - The writer writes the header with frozen flag `0x00` and root offset `0`. It writes the root offset when the root group is complete, and it writes `0xff` to the frozen flag when it closes the file. Thus, if the flag is `0x00`, the root offset can still be `0`.
-- The C++ reader rejects a file with magic other than `"Ogawa"`, and the Abc layer rejects a file with frozen flag other than `0xff`. It reads the version but does not reject other values.
+- The C++ reader rejects a file with magic other than `"Ogawa"`, a file with a version other than `{0, 1}` (the Ogawa reader marks a stream valid only for version 1), and, in the Abc layer, a file with frozen flag other than `0xff`.
 
 Reader rules:
 
-- Reject the file if bytes 0–4 are not `"Ogawa"`.
-- Reject the file if the frozen flag is not `0xff`.
-- Reject the file if the version is not `{0, 1}` (**/alembic rule**).
+- Reject the file if bytes 0–4 are not `"Ogawa"` (**/alembic rule**, the C++ reader does the same).
+- Reject the file if the frozen flag is not `0xff` (**/alembic rule**, the C++ reader does the same).
+- Reject the file if the version is not `{0, 1}` (**/alembic rule**, the C++ reader does the same).
 
-**Check**: src `Ogawa/OStream.cpp:178-184` (header bytes), `Ogawa/OGroup.cpp:255-264` (root offset at byte 8), `Ogawa/OStream.cpp:148-152` (frozen byte), `Ogawa/IStreams.cpp:692-701`, `AbcCoreOgawa/ArImpl.cpp:58`; demo (both headers).
+**Check**: src `Ogawa/OStream.cpp:178-184` (header bytes), `Ogawa/OGroup.cpp:255-264` (root offset at byte 8), `Ogawa/OStream.cpp:148-152` (frozen byte), `Ogawa/IStreams.cpp:692-701`, `AbcCoreOgawa/ArImpl.cpp:58`; `Ogawa/IStreams.cpp:722-727` (valid only if `version == 1`), `AbcCoreOgawa/ArImpl.cpp:55-56`; demo (both headers).
 
 ### 1.2 Child references
 
@@ -104,7 +109,7 @@ Two special words have offset 0:
 
 In the demo files, the only empty data children are array dimensions ([2.10](#210-array-property-samples)): 1 250 in `demo-nonparticle.abc` and 2 250 in `demo.abc`.
 
-**Check**: src `Ogawa/OGroup.cpp:108,131,152-156,185,194,208,219,227,240-243`; demo.
+**Check**: src `Ogawa/Foundation.h:48,50` (the two word values), `Ogawa/OGroup.cpp:108,131,152-156,185,194,208,219,227,240-243`; demo.
 
 ### 1.3 Group
 
@@ -146,7 +151,7 @@ Size on disk: `8 + size` bytes. Example, root child `[1]`:
 
 ### 1.5 Sharing and order on disk
 
-- **Many references can point to one block.** The writer stores each unique sample once. Later equal samples point to the first block ([2.11](#211-sample-keys-and-de-duplication)). A reader must not assume that one block has one parent.
+- **Many references can point to one block.** The writer stores each unique sample once. Later equal samples point to the first block ([2.11](#211-sample-keys-and-de-duplication)). `/alembic` does not assume that one block has one parent (**/alembic rule**).
 - **The writer appends each block when it is complete.** Data blocks are appended when a sample is written. A group is appended when it is complete ("frozen"). If its parent group is already on disk, the writer goes back and writes the new offset into the parent's child table. Thus the format does **not** guarantee that children come before parents.
 - In both demo files, every child is before its parent (0 exceptions in 23 and 31 groups), and the root group is the last structure in the file.
 - Layout of `demo-nonparticle.abc`:
@@ -160,7 +165,7 @@ Size on disk: `8 + size` bytes. Example, root child `[1]`:
   | `0x896e8abf`–`0x896e8df7` | archive metadata, time samplings, indexed metadata                         |
   | `0x896e8df7`–`0x896e8e2f` | root group (ends at end of file)                                           |
 
-- Structure is not only at the end of the file: the first group is at `0x10b` in `demo-nonparticle.abc` and at `0x17ea` in `demo.abc`. A reader must follow offsets from the root.
+- Structure is not only at the end of the file: the first group is at `0x10b` in `demo-nonparticle.abc` and at `0x17ea` in `demo.abc`. `/alembic` follows offsets from the root (**/alembic rule**).
 
 **Check**: src `Ogawa/OGroup.cpp:231-271` (freeze appends at end, patches a frozen parent), `AbcCoreOgawa/WriteUtil.cpp:195-199,286` (shared blocks); demo (child offset < parent offset for all groups; first group offsets; all sample blocks of frame `f` are before all sample blocks of frame `f + 1`, 0 exceptions).
 
@@ -200,7 +205,7 @@ The C++ reader requires more than 5 children with these kinds, and does not read
 00000024: 33 2a 00 00                       → library version 10803 (Alembic 1.8.3)
 ```
 
-- Archive version: the C++ reader accepts only `0`. Reject other values.
+- Archive version: the C++ reader accepts only `0`. `/alembic` rejects other values (**/alembic rule**).
 - Library version: `major × 10000 + minor × 100 + patch` (`10803` = 1.8.3). The C++ reader requires `≥ 9999`.
 
 **Check**: src `AbcCoreOgawa/Foundation.h:57` (`ALEMBIC_OGAWA_FILE_VERSION 0`), `AbcCoreOgawa/ArImpl.cpp:95-112`, `Util/Config.h.in:42`; demo.
@@ -213,7 +218,7 @@ All metadata uses one text form:
 key=value;key=value;...
 ```
 
-- `;` separates pairs, `=` separates key and value. The C++ code keeps pairs in a `std::map`, so the order of pairs has no meaning.
+- `;` separates pairs, `=` separates key and value. The C++ reader stores pairs in a `std::map`. When a key is repeated, it keeps the first value. It stops reading at a pair that has no `=`.
 - An empty string means "no metadata".
 
 **Archive metadata** (root child `[3]`) is a plain string in a data block. It is not in the indexed table. Example (255 bytes):
@@ -227,9 +232,9 @@ key=value;key=value;...
 ```
 
 - `_ai_AlembicVersion` is set by the Alembic writer. `CreateArchiveWithInfo` sets `_ai_Application` and `_ai_Description` (and `_ai_DCC_FPS`) from values the application gives, and sets `_ai_DateWritten` from the clock (`ctime`).
-- `FramesPerTimeUnit` and `blender_version` are not in the Alembic source. The writing application added them.
+- `FramesPerTimeUnit` and `blender_version` are not in the Alembic source.
 
-**Check**: src `Util/TokenMap.h:68`, `AbcCoreAbstract/MetaData.h:126,134`, `AbcCoreOgawa/AwImpl.cpp:103,238-239`, `Abc/ArchiveInfo.h:58-61,178-218`; grep of the full source for `FramesPerTimeUnit` (0 results); demo.
+**Check**: src `Util/TokenMap.h:68`, `Util/TokenMap.cpp:81-133`, `AbcCoreAbstract/MetaData.h:126,134`, `AbcCoreOgawa/AwImpl.cpp:103,238-239`, `Abc/ArchiveInfo.h:58-61,178-218`; grep of the full source for `FramesPerTimeUnit` (0 results); demo.
 
 ### 2.4 Indexed metadata table
 
@@ -335,9 +340,9 @@ The number of children is not stored. The C++ reader removes the last 32 bytes, 
 ```
 
 - The C++ API gives the hashes to applications (`getPropertiesHash`, `getChildrenHash`). `/alembic` skips them (**/alembic rule**).
-- The `schema` metadata key gives the object type. `schemaObjTitle` is `<schema>:<default schema compound name>`, for example `AbcGeom_Xform_v3:.xform`.
+- The C++ schema readers match an object by its `schema` / `schemaObjTitle` metadata. `schemaObjTitle` is `<schema>:<default schema compound name>`, for example `AbcGeom_Xform_v3:.xform`.
 
-**Check**: src `AbcCoreOgawa/WriteUtil.cpp:484-510`, `AbcCoreOgawa/OwData.cpp:186-214`, `AbcCoreOgawa/ReadUtil.cpp:1564-1620`, `Util/SpookyV2.h`, `AbcCoreAbstract/ObjectReader.h:160,164`, `Abc/OSchemaObject.h:68-72`; demo.
+**Check**: src `AbcCoreOgawa/WriteUtil.cpp:484-510`, `AbcCoreOgawa/OwData.cpp:186-214`, `AbcCoreOgawa/ReadUtil.cpp:1564-1620`, `Util/SpookyV2.h`, `AbcCoreAbstract/ObjectReader.h:160,164`, `Abc/OSchemaObject.h:68-72`, `Abc/ISchemaObject.h:96`; demo.
 
 ### 2.6 Compound property group
 
@@ -386,18 +391,18 @@ if metadataIndex == 0xff:
 
 #### `info` bit fields
 
-| Bits  | Mask         | Field                   | Meaning                                                                                                                                    |
-| ----- | ------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0–1   | `0x00000003` | property type           | `0` compound, `1` scalar, `2` array, `3` array that is _scalar-like_ (each sample has exactly 1 element)                                   |
-| 2–3   | `0x0000000c` | size hint               | width of `hint` fields: `0` = `u8`, `1` = `u16`, `2` = `u32`                                                                               |
-| 4–7   | `0x000000f0` | POD type                | data type, see [2.12](#212-data-types)                                                                                                     |
-| 8     | `0x00000100` | has time sampling index | `timeSamplingIndex` is stored. If clear, the index is `0`                                                                                  |
-| 9     | `0x00000200` | has first/last changed  | `firstChangedIndex` and `lastChangedIndex` are stored                                                                                      |
-| 10    | `0x00000400` | homogeneous             | intended meaning: all samples have the same element count. **Do not use**, see [6.4](#64-the-homogeneous-flag-does-not-mean-constant-size) |
-| 11    | `0x00000800` | constant                | `firstChangedIndex = lastChangedIndex = 0`                                                                                                 |
-| 12–19 | `0x000ff000` | extent                  | number of POD values per element (`3` for `P`, `16` for an Xform `.vals` matrix)                                                           |
-| 20–27 | `0x0ff00000` | metadata index          | index into [2.4](#24-indexed-metadata-table). `0xff` = inline after the name                                                               |
-| 28–31 | `0xf0000000` | (not used)              | the writer never sets these bits                                                                                                           |
+| Bits  | Mask         | Field                   | Meaning                                                                                                                                                       |
+| ----- | ------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0–1   | `0x00000003` | property type           | `0` compound, `1` scalar, `2` array, `3` array that is _scalar-like_ (each sample has exactly 1 element)                                                      |
+| 2–3   | `0x0000000c` | size hint               | width of `hint` fields: `0` = `u8`, `1` = `u16`, `2` = `u32`                                                                                                  |
+| 4–7   | `0x000000f0` | POD type                | data type, see [2.12](#212-data-types)                                                                                                                        |
+| 8     | `0x00000100` | has time sampling index | `timeSamplingIndex` is stored. If clear, the index is `0`                                                                                                     |
+| 9     | `0x00000200` | has first/last changed  | `firstChangedIndex` and `lastChangedIndex` are stored                                                                                                         |
+| 10    | `0x00000400` | homogeneous             | writer comment: "Whether the size of the data changes from sample to sample". **Do not use**, see [6.4](#64-the-homogeneous-flag-does-not-mean-constant-size) |
+| 11    | `0x00000800` | constant                | `firstChangedIndex = lastChangedIndex = 0`                                                                                                                    |
+| 12–19 | `0x000ff000` | extent                  | number of POD values per element (`3` for `P`, `16` for the `.vals` of the demo Xform)                                                                        |
+| 20–27 | `0x0ff00000` | metadata index          | index into [2.4](#24-indexed-metadata-table). `0xff` = inline after the name                                                                                  |
+| 28–31 | `0xf0000000` | (not used)              | the writer never sets these bits                                                                                                                              |
 
 - For a **compound**, the writer sets only the type (`0`), the size hint and the metadata index.
 - If bits 9 and 11 are both clear: `firstChangedIndex = 1` and `lastChangedIndex = numSamples − 1`.
@@ -473,7 +478,7 @@ In the demo files, all 16 headers of `demo-nonparticle.abc` and all 22 headers o
 896e8a7d: 2e 63 68 69 6c 64 42 6e 64 73     → ".childBnds"
 ```
 
-**Check**: src `AbcCoreOgawa/WriteUtil.cpp:290-465`, `AbcCoreOgawa/ReadUtil.cpp:1740-1860`, `AbcCoreOgawa/ApwImpl.cpp:192-196` (scalar-like); demo (all headers decode with no bytes left; bit checks).
+**Check**: src `AbcCoreOgawa/WriteUtil.cpp:290-465` (comment for `0x400` at line 337), `AbcCoreOgawa/ReadUtil.cpp:1740-1860`, `AbcCoreOgawa/ApwImpl.cpp:192-196` (scalar-like); demo (all headers decode with no bytes left; bit checks).
 
 ### 2.8 Sample index mapping
 
@@ -534,10 +539,10 @@ group:
 ```
 
 - Element count of a sample:
-  - If the dimensions child is **empty**: rank 1, and `count = (dataSize − 16) / (podSize × extent)`.
+  - If the dimensions child is **empty**: rank 1, and `count = (dataSize − 16) / (podSize × extent)`. If the division has a remainder, the C++ reader adds 1 to the count. `/alembic` rejects such a sample (**/alembic rule**).
   - Else: the dimensions block is `rank` `u64` values. `count` is their product.
-- The writer writes empty dimensions for all arrays of rank ≤ 1, except `string` and `wstring` arrays. String arrays always have a dimensions block.
-- A sample with zero elements: the writer writes a 16-byte block (key, no values). The C++ reader also accepts empty data (size 0) as a sample with no key and no values. A reader must accept both. The demo files have no zero-element samples (the smallest sample block is 17 bytes).
+- The writer writes empty dimensions for all arrays of rank ≤ 1, except `string` and `wstring` arrays. A `string` or `wstring` array of rank 1 or more always has a dimensions block. (For rank 0 the writer adds 0 bytes, which is stored as empty data.)
+- A sample with zero elements is stored as **empty data** (`0x8000000000000000`). For all POD types except `string` and `wstring`, its dimensions child is also empty data. For `string` and `wstring`, the dimensions child is an 8-byte block with the value 0 (rank 1, 0 elements). Reason: the writer starts its key map with an empty key that points to empty data, and Murmur3 of 0 bytes is 16 zero bytes, the same as that empty key. The C++ reader accepts empty data, and blocks of 16 bytes or more; it rejects blocks of 1–15 bytes. `/alembic` does the same (**/alembic rule**). The demo files have no zero-element samples (the smallest sample block is 17 bytes).
 
 ```
 896e5173: f4 01 00 00 00 00 00 00           → .faceCounts group: 500 children (250 samples × 2)
@@ -552,17 +557,17 @@ group:
 0000f68b: 03 00 00 00 03 00 00 00 03 00 00 00 ...           → 3, 3, 3, ...
 ```
 
-**Check**: src `AbcCoreOgawa/WriteUtil.cpp:160-178,262-266`, `Ogawa/OGroup.cpp:146-157`, `AbcCoreOgawa/ReadUtil.cpp:1352-1366`, `AbcCoreOgawa/AprImpl.cpp:105`; demo.
+**Check**: src `AbcCoreOgawa/WriteUtil.cpp:160-178,262-266`, `Ogawa/OGroup.cpp:146-157`, `Ogawa/OGroup.cpp:104-111,194`, `Ogawa/OData.cpp:45-52`, `AbcCoreOgawa/AwImpl.cpp:107-125`, `Util/Digest.h:58`, `AbcCoreOgawa/ReadUtil.cpp:56-80,1352-1366`, `AbcCoreOgawa/AprImpl.cpp:105`; local test file ([section 8](#8-sources)): empty `float` and `V3f` array samples are stored as `0x8000000000000000`, and `MurmurHash3_x64_128` of 0 bytes is 16 zero bytes; second local test file ([section 8](#8-sources)): empty `string` and `wstring` samples have data `0x8000000000000000` and an 8-byte dimensions block with value 0; demo.
 
 ### 2.11 Sample keys and de-duplication
 
-The first 16 bytes of each non-empty sample block are the **key**: **MurmurHash3_x64_128** with seed 0, of the value bytes after the key.
+The first 16 bytes of each non-empty sample block are the **key**: **MurmurHash3_x64_128** with seed 0. For all POD types except `wstring`, the hash input is all value bytes after the key.
 
-- For `string`, the hash input is the strings with a `0x00` after each string. These are the same bytes as on disk. For `wstring`, it is the `int32` units with a `0` unit after each string, also the same bytes as on disk.
+- For `string`, the value bytes are the strings with a `0x00` after each string. For `wstring`, the value bytes are `int32` units with a `0` unit after each string, but the writer gives the **number of units** as the byte length. Thus the key is Murmur3 of the first `n` bytes only, where `n` is the number of units (with terminators). Example from the test file: `{"abcdefgh", "xyz"}` is 13 units (52 bytes), and the key is Murmur3 of the first 13 bytes.
 - All sample blocks of both demo files were checked with `MurmurHash3_x64_128` from the installed Alembic library (`libAlembic` 1.8.12): 1 503 of 1 503 and 2 250 of 2 250 keys match.
 - The article by Ginger Bill ([section 8](#8-sources)) says the key is "a 16-byte (128 bit) SpookyHash". That is not correct. SpookyHash V2 is used for the 32 hash bytes in object headers ([2.5.1](#251-object-headers)) and for property hashes, not for sample keys.
 
-The writer keeps one map of keys for the whole archive. A key in the map is: byte count, POD type, and digest. For all POD types except `string` and `wstring`, the writer sets the POD type to `int8` before it looks in the map. If the key is in the map, the writer does not write the data again: it adds a reference to the first block. This works across properties, objects and POD types.
+The writer keeps one map of keys for the whole archive. A key in the map is: byte count, `origPOD`, `readPOD` and digest. The byte count is `DataType::getNumBytes() × numPoints`; for `string` and `wstring` it counts `sizeof(std::string)` or `sizeof(std::wstring)` per value, so in general it is not the size on disk. For all POD types except `string` and `wstring`, the writer sets both POD fields to `int8` before it looks in the map. If the key is in the map, the writer does not write the data again: it adds a reference to the first block. This works across properties, objects and POD types.
 
 Example: `.inherits` of `/Cube` (`bool` `1`) and `visible` of `/Cube` (`int8` `1`) have the same byte. Both groups point to one block:
 
@@ -577,7 +582,7 @@ Example: `.inherits` of `/Cube` (`bool` `1`) and `visible` of `/Cube` (`int8` `1
 
 `/alembic` does not check keys (**/alembic rule**). It skips the 16 bytes.
 
-**Check**: src `AbcCoreAbstract/ArraySample.cpp:45-130`, `Util/Murmur3.cpp`, `AbcCoreAbstract/ArraySampleKey.h:60-66`, `AbcCoreOgawa/ApwImpl.cpp:144-158`, `AbcCoreOgawa/SpwImpl.cpp:150-154`, `AbcCoreOgawa/WriteUtil.cpp:183-205`, `AbcCoreOgawa/WrittenSampleMap.h:101-122`, `AbcCoreOgawa/OwData.cpp:186-214`; demo (key check with `libAlembic`); ext (article quote).
+**Check**: src `AbcCoreAbstract/ArraySample.cpp:45-130`, `Util/Murmur3.cpp`, `AbcCoreAbstract/ArraySample.cpp:49,51` (byte count), `AbcCoreAbstract/DataType.h:96-99`, `Util/PlainOldDataType.h:247-248,266-267,348-349` (`sizeof( std::string )`, `sizeof( std::wstring )`), `AbcCoreAbstract/ArraySample.cpp:126` (wstring length), `Util/Murmur3.cpp:53-57` (`len` is bytes), `AbcCoreAbstract/ArraySampleKey.h:53-66`, `AbcCoreOgawa/ApwImpl.cpp:144-158`, `AbcCoreOgawa/SpwImpl.cpp:150-154`, `AbcCoreOgawa/WriteUtil.cpp:183-205`, `AbcCoreOgawa/WrittenSampleMap.h:101-122`, `AbcCoreOgawa/OwData.cpp:186-214`; demo (key check with `libAlembic`); local test file ([section 8](#8-sources)) (wstring key); ext (article quote).
 
 ### 2.12 Data types
 
@@ -585,7 +590,7 @@ The POD type is bits 4–7 of `info`:
 
 | Value | POD       | Bytes | JS read                 |
 | ----- | --------- | ----- | ----------------------- |
-| 0     | `bool`    | 1     | `getUint8() !== 0`      |
+| 0     | `bool`    | 1     | `getUint8()`, see below |
 | 1     | `uint8`   | 1     | `getUint8`              |
 | 2     | `int8`    | 1     | `getInt8`               |
 | 3     | `uint16`  | 2     | `getUint16(o, true)`    |
@@ -601,11 +606,12 @@ The POD type is bits 4–7 of `info`:
 | 13    | `wstring` | var   | see below               |
 
 - Values 14 and 15 are not valid. The C++ reader rejects them.
+- **bool**: 1 byte. The demo `bool` values are only `0` and `1`. `/alembic` reads `0` as `false` and any other value as `true` (**/alembic rule**).
 - **Extent**: one element is `extent` POD values, one after the other. `P` is `float32` with extent 3: `x y z x y z ...`.
-- **float16**: Alembic's `float16_t` is the Imath `half` type: IEEE 754 binary16, 1 sign bit, 5 exponent bits, 10 mantissa bits. Node 20.9 has no `DataView.prototype.getFloat16`, so decode in code. The demo files have no `float16` data.
+- **float16**: Alembic's `float16_t` is the Imath `half` type: IEEE 754-2008 binary16, 1 sign bit, 5 exponent bits, 10 significand bits, exponent bias 15. Node 20.9 has no `DataView.prototype.getFloat16`. The demo files have no `float16` data.
 - **string**: each string is its bytes followed by `0x00`. Split on `0x00`. The writer rejects strings that contain `0x00`. The format does not store an encoding. `/alembic` decodes the bytes as UTF-8 (**/alembic rule**). The demo files have no string data.
 - **wstring**: each string is one `int32` per `wchar_t` of the writer, followed by a `0` unit. The demo files have no wstring data.
-- **Bounds** (`.selfBnds`, `.childBnds`): `float64` extent 6, metadata `interpretation=box`, values `minX minY minZ maxX maxY maxZ`. In both files, each `Cube_241/.geom/.selfBnds` sample contains all points of the `P` sample of the same frame (250 of 250). An empty box has min `+DBL_MAX` and max `−DBL_MAX`:
+- **Bounds** (`.selfBnds`, `.childBnds`): `float64` extent 6, metadata `interpretation=box`, values `minX minY minZ maxX maxY maxZ` (Imath `Box` stores `min`, then `max`). In both files, each `Cube_241/.geom/.selfBnds` sample contains all points of the `P` sample of the same frame (250 of 250). Imath `makeEmpty` sets min to `baseTypeMax()` and max to `baseTypeLowest()`. In the demo, an empty box has min `+DBL_MAX` and max `−DBL_MAX`:
 
   ```
   00028f0b: 40 00 00 00 00 00 00 00           → size 64
@@ -614,28 +620,28 @@ The POD type is bits 4–7 of `info`:
   00028f3b: ff ff ff ff ff ff ef ff (× 3)     → max = −1.7976931348623157e308   (empty box)
   ```
 
-- The `interpretation` values defined in the Alembic source are `point`, `vector`, `normal`, `box`, `matrix`, `rgb`, `rgba`, `quat`. They do not change the bytes.
+- The `interpretation` values defined in the Alembic source are `point`, `vector`, `normal`, `box`, `matrix`, `rgb`, `rgba`, `quat`.
 
-**Check**: src `Util/PlainOldDataType.h:159,189-222,254-267`, Imath 3.2.2 `half.h:18-20`, `AbcCoreOgawa/ReadUtil.cpp:1766-1787`, `AbcCoreOgawa/WriteUtil.cpp:213-258`, `Abc/TypedPropertyTraits.h`; ext/local: `node -e` on Node v20.9.0 (`typeof DataView.prototype.getFloat16` is `undefined`; `Number.MAX_SAFE_INTEGER === 2**53 - 1`); demo.
+**Check**: src `Util/PlainOldDataType.h:159,189-222,254-267`, Imath 3.2.2 `half.h:18-20,70-90`, `ImathBox.h:44,47,84-86`, `AbcCoreOgawa/ReadUtil.cpp:1766-1787`, `AbcCoreOgawa/WriteUtil.cpp:213-258`, `Abc/TypedPropertyTraits.h` (grep of the full source: no other `interpretation` values); ext/local: `node -e` on Node v20.9.0 (`typeof DataView.prototype.getFloat16` is `undefined`; `Number.MAX_SAFE_INTEGER === 2**53 - 1`); demo.
 
 ---
 
 ## 3. AbcGeom schemas
 
-A schema is a set of named properties in one compound property of an object. In the PolyMesh, Points, Xform and GeomParam source, property names start with `.`, except `P`, `N`, `uv`, `visible` and `isNotConstantIdentity`.
+A schema is a set of named properties in one compound property of an object. In the PolyMesh, Points, Xform and GeomParam source, property names start with `.`, except `P`, `N`, `uv` and `isNotConstantIdentity`. The visibility property `visible` (`AbcGeom/Visibility.h:78`) also has no `.`.
 
-### 3.1 Parts common to all schemas
+### 3.1 Common parts
 
 - In the demo files, the metadata of each object except `/` has `schema=<name>` and `schemaObjTitle=<name>:<compound>` ([2.5.1](#251-object-headers)).
-- The schema compound is in the object's top compound. Its metadata has `schema=<name>`, and for geometry also `schemaBaseType=AbcGeom_GeomBase_v1`.
-- Parts of a schema compound:
+- In the demo files, the schema compound is in the object's top compound, and its metadata has `schema=<name>`. The C++ writer also sets `schemaBaseType` on the object and on the schema compound when the schema has one and is not sparse (in the demo: `AbcGeom_GeomBase_v1` for PolyMesh and Points).
+- PolyMesh and Points are GeomBase schemas. Their schema compound can have these parts (Xform has no `.selfBnds`, see [3.4](#34-xform-abcgeom_xform_v3-compound-xform)):
 
-| Name              | Kind     | Type         | Content                                                    |
-| ----------------- | -------- | ------------ | ---------------------------------------------------------- |
-| `.selfBnds`       | scalar   | `float64[6]` | bounds of this object's geometry ([2.12](#212-data-types)) |
-| `.childBnds`      | scalar   | `float64[6]` | bounds of the children                                     |
-| `.arbGeomParams`  | compound |              | extra geometry parameters ([3.3](#33-geometry-parameters)) |
-| `.userProperties` | compound |              | user data (in the demo: `meshtype`, `bool`)                |
+| Name              | Kind     | Type         | Content                                                                                                                                                                 |
+| ----------------- | -------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.selfBnds`       | scalar   | `float64[6]` | "self bounds" in the source comment; the C++ reader always reads it ([2.12](#212-data-types)); for the demo Points see [6.5](#65-selfbnds-of-points-is-the-mesh-bounds) |
+| `.childBnds`      | scalar   | `float64[6]` | "children bounds" in the source comment; read if present; no schema compound in the demo has it                                                                         |
+| `.arbGeomParams`  | compound |              | read if present; geometry parameters ([3.3](#33-geometry-parameters)) (in the demo: `Pref`)                                                                             |
+| `.userProperties` | compound |              | read if present; user data (in the demo: `meshtype`, `bool`)                                                                                                            |
 
 - `visible`: an `int8` scalar in the object's **top** compound (not in the schema compound). `-1` deferred, `0` hidden, `1` visible. If there is no `visible` property, the C++ reader returns "deferred".
 
@@ -654,30 +660,30 @@ Tree of `demo-nonparticle.abc`:
 
 `demo.abc` has `/Cube/Liquid` (Points_v1) as the first child of `/Cube`, and `Cube_241` as the second.
 
-**Check**: src `AbcGeom/OPolyMesh.cpp`, `AbcGeom/OPoints.cpp`, `AbcGeom/OXform.cpp`, `AbcGeom/OGeomParam.h` (all quoted names), `AbcGeom/OGeomBase.h:167-209`, `AbcGeom/IGeomBase.h:118-124`, `AbcGeom/Visibility.h:60-78`, `AbcGeom/Visibility.cpp:86-100`, `AbcGeom/OXform.cpp:359-401`; demo; `abcls -r -l -t` (1.8.12) output for both files.
+**Check**: src `AbcGeom/OPolyMesh.cpp`, `AbcGeom/OPoints.cpp`, `AbcGeom/OXform.cpp`, `AbcGeom/OGeomParam.h` (all quoted names), `AbcGeom/OGeomBase.h:167-209`, `AbcGeom/IGeomBase.h:118-135,185-190`, `Abc/OSchemaObject.h:192-203`, `Abc/OSchema.h:260-269`, `AbcGeom/IXform.cpp:55-66,182-195`, `AbcGeom/Visibility.h:60-78`, `AbcGeom/Visibility.cpp:86-100`, `AbcGeom/OXform.cpp:359-401`; demo; `abcls -r -l -t` (1.8.12) output for both files.
 
 ### 3.2 PolyMesh (`AbcGeom_PolyMesh_v1`, compound `.geom`)
 
-| Name                                | Kind      | Type         | C++ reader       | Content                                     |
-| ----------------------------------- | --------- | ------------ | ---------------- | ------------------------------------------- |
-| `P`                                 | array     | `float32[3]` | always reads     | vertex positions                            |
-| `.faceIndices`                      | array     | `int32[1]`   | always reads     | vertex index for each face corner           |
-| `.faceCounts`                       | array     | `int32[1]`   | always reads     | corner count for each face                  |
-| `.selfBnds`                         | scalar    | `float64[6]` | always reads     | bounds                                      |
-| `N`                                 | GeomParam | `float32[3]` | reads if present | normals                                     |
-| `uv`                                | GeomParam | `float32[2]` | reads if present | texture coordinates (not in the demo files) |
-| `.velocities`                       | array     | `float32[3]` | reads if present | velocity per vertex (not in the demo files) |
-| `.arbGeomParams`, `.userProperties` | compound  |              | reads if present |                                             |
+| Name                                | Kind      | Type         | C++ reader       | Content                                       |
+| ----------------------------------- | --------- | ------------ | ---------------- | --------------------------------------------- |
+| `P`                                 | array     | `float32[3]` | always reads     | positions (`interpretation=point`)            |
+| `.faceIndices`                      | array     | `int32[1]`   | always reads     | index into `P` for each face corner           |
+| `.faceCounts`                       | array     | `int32[1]`   | always reads     | corner count for each face                    |
+| `.selfBnds`                         | scalar    | `float64[6]` | always reads     | bounds                                        |
+| `N`                                 | GeomParam | `float32[3]` | reads if present | normals (`interpretation=normal`)             |
+| `uv`                                | GeomParam | `float32[2]` | reads if present | read by `getUVsParam` (not in the demo files) |
+| `.velocities`                       | array     | `float32[3]` | reads if present | `V3f` array (not in the demo files)           |
+| `.arbGeomParams`, `.userProperties` | compound  |              | reads if present |                                               |
 
 "Always reads" means the C++ reader opens the property without first checking that it exists. "Reads if present" means it checks with `getPropertyHeader` first.
 
 Rules:
 
-- Face `f` uses `.faceCounts[f]` corners. The corners of face `f` start at the sum of all counts before `f`. Thus `sum(.faceCounts) == length(.faceIndices)`.
-- Each value in `.faceIndices` is an index into `P`: `0 ≤ value < length(P)`.
-- The format allows any corner count per face. The demo mesh has only triangles (36 051 236 faces over 250 frames, all with 3 corners). `/alembic` must triangulate faces with more than 3 corners (**/alembic rule**).
-- **Winding.** In both files, over all 250 frames, the stored normal `N` of the first corner is opposite to the counter-clockwise normal `(P[b] − P[a]) × (P[c] − P[a])` for 36 051 094 faces. It agrees for 3 faces. The cross product is 0 for 139 faces. Thus the demo faces are clockwise. three.js uses counter-clockwise front faces (`gl.frontFace(gl.CCW)` by default, and the OpenGL ES default is `GL_CCW`). `/alembic` must reverse the corner order of each face for three.js (**/alembic rule**).
-- **Topology can change on each frame.** Then `P`, `.faceIndices` and `.faceCounts` all change size. The file does not store a topology type. Compare sample sizes (do not use the `0x400` flag, see [6.4](#64-the-homogeneous-flag-does-not-mean-constant-size)).
+- Face `f` uses `.faceCounts[f]` corners, and they start at position `sum(.faceCounts[0 … f−1])` in `.faceIndices`. The Alembic Maya importer reads the corners this way (`base += curNum`). `/alembic` requires `sum(.faceCounts) == length(.faceIndices)` (**/alembic rule**). The C++ reader does not check this.
+- Each value in `.faceIndices` is an index into `P`. `/alembic` requires `0 ≤ value < length(P)` (**/alembic rule**). The C++ reader does not check this. Both rules hold for all demo frames.
+- `.faceCounts` values are `int32`. The demo mesh has only triangles (36 051 236 faces over 250 frames, all with 3 corners). `/alembic` must triangulate faces with more than 3 corners (**/alembic rule**).
+- **Winding.** In both files, over all 250 frames (36 051 236 faces), the stored normal `N` of the first corner is opposite to the counter-clockwise normal `(P[b] − P[a]) × (P[c] − P[a])` for 36 051 094 faces, and agrees for 3 faces. For 139 faces the sign is not known: 130 have a zero cross product, and 9 have a non-zero cross product that is perpendicular to `N`. Thus 36 051 094 demo faces are clockwise when seen from the side that the stored normal points to. In three.js, a mesh with a `FrontSide` material (the default `side`) and a world matrix with `determinantAffine() > 0` is drawn with counter-clockwise front faces: `renderBufferDirect` passes `frontFaceCW = false` to `setMaterial`, `setMaterial` calls `setFlipSided(false)`, and `setFlipSided(false)` calls `gl.frontFace(gl.CCW)` when the cached value is not already `false` (`reset()` also calls `gl.frontFace(gl.CCW)`). The OpenGL ES default is also `GL_CCW`. `/alembic` must reverse the corner order of each face for three.js (**/alembic rule**).
+- **Topology can change on each frame.** In the demo, the sizes of `P`, `.faceIndices` and `.faceCounts` are not constant. The file has no topology field (2.7 lists all header fields). `/alembic` compares sample sizes and keys, and does not use the `0x400` flag (**/alembic rule**, see [6.4](#64-the-homogeneous-flag-does-not-mean-constant-size)).
 
 Checked in both files (the counts are equal in both files):
 
@@ -707,7 +713,7 @@ For all 250 frames: `sum(.faceCounts) == length(.faceIndices)`, `0 ≤ index < l
 00007c0f: 03 00 00 00 02 00 00 00 00 00 00 00   → face 1 = (3, 2, 0)
 ```
 
-**Check**: src `AbcGeom/IPolyMesh.cpp:83-106`, `AbcGeom/OPolyMesh.cpp:229-275`; demo (all frames, both files); ext (three.js `WebGLState.js`, Khronos `glFrontFace`).
+**Check**: src `AbcGeom/IPolyMesh.cpp:83-106`, `AbcGeom/OPolyMesh.cpp:229-275`; `AbcGeom/IPolyMesh.h:207-209,287`, `maya/AbcImport/MeshHelper.cpp:275-285` (corner layout); demo (all frames, both files; the corner layout is the one in which the winding and `N` tests give these results; they read the corners of face `f` at `3f` … `3f + 2`); ext (three.js `WebGLRenderer.js`, `WebGLState.js`, `Material.js`, `constants.js`, Khronos `glFrontFace`).
 
 ### 3.3 Geometry parameters
 
@@ -731,14 +737,14 @@ To expand: `value[j] = .vals[.indices[j]]`. The demo files have only not-indexed
 
 Metadata keys:
 
-| Key              | Meaning                                               |
-| ---------------- | ----------------------------------------------------- |
-| `geoScope`       | which items have a value, below                       |
-| `isGeomParam`    | `true`                                                |
-| `podName`        | POD name of one value, for example `float32_t`        |
-| `podExtent`      | extent of one value                                   |
-| `arrayExtent`    | values per item (`1` in all demo geometry parameters) |
-| `interpretation` | as in [2.12](#212-data-types)                         |
+| Key              | Meaning                                                                                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `geoScope`       | which items have a value, below                                                                                                                    |
+| `isGeomParam`    | `true`                                                                                                                                             |
+| `podName`        | POD name of one value, for example `float32_t`                                                                                                     |
+| `podExtent`      | extent of one value                                                                                                                                |
+| `arrayExtent`    | written from the `iArrayExtent` argument of `OGeomParam`; the C++ reader returns `1` when the key is missing (`1` in all demo geometry parameters) |
+| `interpretation` | as in [2.12](#212-data-types)                                                                                                                      |
 
 `geoScope` for a PolyMesh ("PointsPolygons" in the Alembic table):
 
@@ -752,19 +758,22 @@ Metadata keys:
 
 In both files, `N` is `fvr` and `Pref` (in `.arbGeomParams`) is `vtx`, and their lengths match this table on all 250 frames ([3.2](#32-polymesh-abcgeom_polymesh_v1-compound-geom)).
 
-**Check**: src `AbcGeom/OGeomParam.h:186-240`, `AbcGeom/IGeomParam.h:161,251-253`, `AbcGeom/GeometryScope.h:60-104`, `AbcGeom/GeometryScope.h:117-134`; demo.
+**Check**: src `AbcGeom/OGeomParam.h:186-240`, `AbcGeom/OGeomParam.h:155,204-207`, `AbcGeom/IGeomParam.h:159-164,251-253,380-383` (`getExpanded`: `v[i] = (*valPtr)[ (*idxPtr)[i] ]`), `AbcGeom/GeometryScope.h:60-104`, `AbcGeom/GeometryScope.h:117-134`; demo.
 
 ### 3.4 Xform (`AbcGeom_Xform_v3`, compound `.xform`)
 
-| Name                    | Kind   | Type                   | C++ reader                                                                                    |
-| ----------------------- | ------ | ---------------------- | --------------------------------------------------------------------------------------------- |
-| `.ops`                  | scalar | `uint8[numOps]`        | reads sample 0 only. If missing, no ops                                                       |
-| `.vals`                 | scalar | `float64[numChannels]` | all channel values, in op order. The writer uses an array `float64[1]` if `numChannels > 256` |
-| `.inherits`             | scalar | `bool`                 | can have many samples. If missing or empty: `true`                                            |
-| `.animChans`            | array  | `uint32[1]`            | indices of animated channels. Reads the last sample                                           |
-| `isNotConstantIdentity` | scalar | `bool`                 | if the property exists, the transform is not constant identity                                |
+| Name                    | Kind     | Type                   | C++ reader                                                                                    |
+| ----------------------- | -------- | ---------------------- | --------------------------------------------------------------------------------------------- |
+| `.ops`                  | scalar   | `uint8[numOps]`        | reads sample 0 only. If missing, no ops                                                       |
+| `.vals`                 | scalar   | `float64[numChannels]` | all channel values, in op order. The writer uses an array `float64[1]` if `numChannels > 256` |
+| `.inherits`             | scalar   | `bool`                 | can have many samples. If missing or empty: `true`                                            |
+| `.animChans`            | array    | `uint32[1]`            | indices of animated channels. Reads the last sample                                           |
+| `isNotConstantIdentity` | scalar   | `bool`                 | if the property exists, the transform is not constant identity                                |
+| `.childBnds`            | scalar   | `float64[6]`           | read if present                                                                               |
+| `.arbGeomParams`        | compound |                        | read if present                                                                               |
+| `.userProperties`       | compound |                        | read if present                                                                               |
 
-- `.inherits` = `false` means: do not multiply with the parent transform ("ignore the parent").
+- The source comment for `.inherits` is: "Does this xform concatenate to or ignore the transforms of its parents?". `false` = ignore the parents.
 - If `.ops` is missing, the op list is empty and the matrix is identity.
 
 Op byte: `type << 4 | hint`.
@@ -779,13 +788,13 @@ Op byte: `type << 4 | hint`.
 | 5    | rotate Y  | 1        | angle in degrees                 |
 | 6    | rotate Z  | 1        | angle in degrees                 |
 
-The hint is a label for applications (for example, translate hints `1`–`4` are scale / rotate pivot points). `XformSample::getMatrix` does not use it.
+The source comment for hints is: "meant to help disambiguate these similiar mathmatical types when reading back into applications that natively support the type". Translate hints: `1` scale pivot point, `2` scale pivot translation, `3` rotate pivot point, `4` rotate pivot translation. `XformSample::getMatrix` does not read the hint.
 
 **Matrix.** `XformSample::getMatrix` starts with identity, and for each op `i` in order does `ret = M(op i) * ret`, with Imath row-vector matrices. In three.js (column vector) terms this is `M = M(op 0) × M(op 1) × … × M(op n−1)`: the **last** op is applied first to a point. For the op list `translate, rotate, scale` this gives `T × R × S`.
 
-A matrix op stores `m.x[j][k]` at channel `4j + k`, so its translation is in channels 12, 13, 14. three.js `Matrix4.elements` is column-major, `fromArray` copies the array into `elements` without change, and `setPosition` writes the translation to `elements[12..14]`. Thus the 16 channels of a matrix op go directly into `Matrix4.fromArray`.
+A matrix op stores `m.x[j][k]` at channel `4j + k`, so its translation is in channels 12, 13, 14. three.js `Matrix4.elements` is "a column-major list of matrix values", `fromArray` copies the array into `elements` without change, and `setPosition` writes the translation to `elements[12..14]`. Thus the 16 channels of a matrix op go directly into `Matrix4.fromArray`.
 
-**Animated vs static.** If `.vals` and `.inherits` are both constant (bit `0x800`), the transform is static. Else read the samples of each frame.
+**Animated vs static.** The C++ reader treats the transform as constant when `.vals` and `.inherits` are each constant or missing. For a property, constant means `firstChangedIndex == 0` (with the C++ writer this is always bit `0x800`, because the first change sets `firstChangedIndex` to the index of that sample, which is ≥ 1).
 
 `/Cube` in the demo is a static identity matrix:
 
@@ -797,7 +806,7 @@ A matrix op stores `m.x[j][k]` at channel `4j + k`, so its translation is in cha
 00000059: 1.0 0 0 0  0 1.0 0 0  0 0 1.0 0  0 0 0 1.0      → identity (see 2.9)
 ```
 
-**Check**: src `AbcGeom/OXform.cpp:40,55-80,145-215,274-279`, `AbcGeom/IXform.cpp:55-140,325-340`, `AbcGeom/XformOp.cpp:55-80,85,277-279`, `AbcGeom/XformOp.h:51-111`, `AbcGeom/XformSample.cpp:550-613`, `AbcGeom/XformSample.h:84-87`; Imath 3.2.2 `ImathMatrix.h:1339` (`r = v * m`), `ImathMatrix.h:4828-4845` (`setTranslation` writes `x[3][0..2]`); ext (three.js `Matrix4.js`); demo.
+**Check**: src `AbcGeom/OXform.cpp:40,55-80,145-215,274-279`, `AbcGeom/IXform.cpp:55-140,182-195,325-340`, `AbcCoreOgawa/AprImpl.cpp:97-100`, `AbcCoreOgawa/SprImpl.cpp:97-100`, `AbcCoreOgawa/ApwImpl.cpp:205-211`, `AbcGeom/XformOp.cpp:55-80,85,277-279`, `AbcGeom/Foundation.h:70-79` (op types), `AbcGeom/XformOp.h:51-111`, `AbcGeom/XformSample.cpp:550-613`, `AbcGeom/XformOp.h:88-111`, `AbcGeom/XformSample.h:84-87`; Imath 3.2.2 `ImathMatrix.h:1369-1372` (`r = v * m` for `Vec3` × `Matrix44`), `ImathMatrix.h:4828-4845` (`setTranslation` writes `x[3][0..2]`); ext (three.js `Matrix4.js`); demo.
 
 ### 3.5 Points (`AbcGeom_Points_v1`, compound `.geom`)
 
@@ -815,7 +824,7 @@ Data in `demo.abc` (all 250 frames):
 
 - The point count changes: 239 points in frame 0, 69 344 at most.
 - `P`, `.pointIds`, `.velocities` and `.widths` have the same length in each frame.
-- `.pointIds` is `0, 1, …, n−1` in every frame. Thus in this file the IDs do not follow one particle from frame to frame.
+- `.pointIds` is `0, 1, …, n−1` in every frame.
 - All `.widths` values are `0.05` (`float32`).
 - `.velocities` is a copy of `P`, and `.selfBnds` is the mesh bounds (see [6.1](#61-velocities-of-points-is-a-copy-of-p), [6.5](#65-selfbnds-of-points-is-the-mesh-bounds)).
 
@@ -838,14 +847,14 @@ Root child `[4]` holds all time samplings of the archive, one after the other:
 
 ```
 repeat until end of block:
-  u32        maxSample        largest sample count of the properties that use this sampling
+  u32        maxSample        see below
   f64        timePerCycle
   u32        numStoredTimes   (≥ 1)
   f64[n]     storedTimes
 ```
 
-- For `maxSample`, a constant property counts as 1 sample.
-- Index `0` is always the default sampling: uniform, `timePerCycle` 1.0, stored time 0.0. A property uses it when bit `0x100` of its header is clear.
+- `maxSample`: the C++ writer stores the largest sample count of the properties that use this sampling; a constant property counts as 1 sample. An application can also set the value with the public `setMaxNumSamplesForTimeSamplingIndex`.
+- The C++ writer always writes index `0` as the default sampling: uniform, `timePerCycle` 1.0, stored time 0.0. A property uses index `0` when bit `0x100` of its header is clear.
 
 ```
 896e8bc6: 30 00 00 00 00 00 00 00           → size 48
@@ -861,24 +870,24 @@ repeat until end of block:
 
 In the demo, `maxSample` of sampling `[0]` is 250 because of `Pref` ([6.2](#62-pref-uses-time-sampling-0)).
 
-**Check**: src `AbcCoreOgawa/WriteUtil.cpp:513-537`, `AbcCoreOgawa/ReadUtil.cpp:1491-1550`, `AbcCoreOgawa/AwImpl.cpp:56-58,242-250`, `AbcCoreOgawa/ApwImpl.cpp:68-86`, `AbcCoreOgawa/SpwImpl.cpp:65-84`, `AbcCoreAbstract/TimeSampling.cpp:110-115`; demo.
+**Check**: src `AbcCoreOgawa/WriteUtil.cpp:513-537`, `AbcCoreOgawa/ReadUtil.cpp:1491-1550`, `AbcCoreOgawa/AwImpl.cpp:56-58,242-250`, `AbcCoreOgawa/ApwImpl.cpp:68-86`, `AbcCoreOgawa/SpwImpl.cpp:65-84`, `AbcCoreAbstract/ArchiveWriter.h:139`, `AbcCoreAbstract/TimeSampling.cpp:110-115`; demo.
 
 ### 4.1 Sampling types
 
 `ACYCLIC = Number.MAX_VALUE / 32` (`f64` bytes `0x7f9fffffffffffff`, `5.6177910464447366e306`).
 
-| Type    | Rule                                                | Time of sample `i`                         |
-| ------- | --------------------------------------------------- | ------------------------------------------ |
-| uniform | `numStoredTimes == 1` and `timePerCycle != ACYCLIC` | `t[0] + i × timePerCycle`                  |
-| cyclic  | `numStoredTimes > 1` and `timePerCycle != ACYCLIC`  | `t[i mod n] + floor(i / n) × timePerCycle` |
-| acyclic | `timePerCycle == ACYCLIC`                           | `t[i]`, `i < n`                            |
+| Type    | Rule                                                         | Time of sample `i`                         |
+| ------- | ------------------------------------------------------------ | ------------------------------------------ |
+| uniform | `numStoredTimes == 1` and `timePerCycle != ACYCLIC`          | `t[0] + i × timePerCycle`                  |
+| cyclic  | `1 < numStoredTimes < 2³² − 1` and `timePerCycle != ACYCLIC` | `t[i mod n] + floor(i / n) × timePerCycle` |
+| acyclic | `timePerCycle == ACYCLIC`                                    | `t[i]`, `i < n`                            |
 
 - The writer writes `timePerCycle` as raw `f64` bytes, and the C++ reader compares it with `ACYCLIC` with `!=`. Compare exactly.
 - Uniform and cyclic samplings have no end. The number of samples comes from each property (`numSamples`).
 - Archive time range (C++ `GetArchiveStartAndEndTime`): from the samplings with index ≠ 0 and `maxSample > 1`, the range is `[min time(0), max time(maxSample − 1)]`. If there are none, it uses the samplings with index ≠ 0 and `maxSample == 1`. If there are none, it uses sampling 0 (if its `maxSample > 0`).
 - Both demo files: sampling `[1]` is uniform, `t[0]` = 1/24, step 1/24, `maxSample` 250. Thus the range is 1/24 s … 250/24 s (0.0417 s … 10.4167 s).
 
-**Check**: src `AbcCoreAbstract/TimeSamplingType.cpp:51,64-67`, `AbcCoreAbstract/TimeSampling.cpp:133-155`, `AbcCoreOgawa/ReadUtil.cpp:1540-1543`, `Abc/ArchiveInfo.cpp:92-150`; local `python3` (`struct.pack('>d', sys.float_info.max / 32)`); demo.
+**Check**: src `AbcCoreAbstract/TimeSamplingType.cpp:48,51,64-67`, `AbcCoreAbstract/TimeSamplingType.h:139-143`, `AbcCoreAbstract/TimeSampling.cpp:133-155`, `AbcCoreOgawa/ReadUtil.cpp:1540-1543`, `Abc/ArchiveInfo.cpp:92-150`; local `python3` (`struct.pack('>d', sys.float_info.max / 32)`); demo.
 
 ### 4.2 Time to sample index
 
@@ -912,8 +921,8 @@ The C++ `getFloorIndex` clamps a time before `time(0)` to index 0, and a time af
 | Collections                                  | object `schema=AbcCollection_Collections_v1`                      | skip                                |
 | Layered archives (several files read as one) | object or property metadata `prune=1` or `replace=1`              | ignore the keys, read one file only |
 
-- The C++ factory tries Ogawa first, then HDF5. HDF5 2.2.0 writes the 8 bytes above at offset 0 of a new file (checked with a test file made with `H5Fcreate`). Alembic HDF5 files were not tested.
-- When `/alembic` skips an object, it still walks the object's children.
+- The C++ factory tries Ogawa first, then HDF5. The HDF5 detection above is a **/alembic rule** based on one test: HDF5 2.2.0 writes these 8 bytes at offset 0 of a new file (test file made with `H5Fcreate`). Alembic HDF5 files were not tested.
+- When `/alembic` skips an object, it still walks the object's children (**/alembic rule**).
 
 **Check**: src `AbcCoreFactory/IFactory.cpp:66-81`, `AbcGeom/SchemaInfoDeclarations.h`, `AbcMaterial/`, `AbcCollection/`, `AbcCoreLayer/Util.cpp:43-70`, `AbcCoreLayer/OrImpl.cpp:264-267`, `AbcCoreLayer/CprImpl.cpp:215-218`, `AbcGeom/OPolyMesh.cpp:443-451`; local (HDF5 test file, `xxd`); demo (no `prune` / `replace` keys, no inline metadata).
 
@@ -921,7 +930,7 @@ The C++ `getFloorIndex` clamps a time before `time(0)` to index 0, and a time af
 
 ## 6. Writer quirks found in the demo files
 
-These are true for the demo files (Blender 5.0.0, Alembic 1.8.3). `/alembic` must work with them.
+These are true for the demo files (Blender 5.0.0, Alembic 1.8.3). `/alembic` must read files with these properties (**/alembic rule**).
 
 ### 6.1 `.velocities` of Points is a copy of `P`
 
@@ -931,36 +940,38 @@ In `demo.abc`, all 250 `.velocities` samples of `/Cube/Liquid` point to the **sa
 
 ### 6.2 `Pref` uses time sampling 0
 
-`Pref` in `.arbGeomParams` has 250 different samples, but its header has no time sampling index. Thus it uses sampling `0` (times 0 s, 1 s, 2 s, …). Its sample `i` has the same length as sample `i` of `P` on all 250 frames. Match `Pref` to `P` by sample index, not by time.
+`Pref` in `.arbGeomParams` has 250 different samples, but its header has no time sampling index. Thus it uses sampling `0` (times 0 s, 1 s, 2 s, …). Its sample `i` has the same length as sample `i` of `P` on all 250 frames. `/alembic` matches `Pref` to `P` by sample index, not by time (**/alembic rule**).
 
 **Check**: demo.
 
 ### 6.3 `.childBnds` of `/` is an empty box
 
-The top object has a constant `.childBnds` with the empty box (min `+DBL_MAX`, max `−DBL_MAX`). Use the `.selfBnds` of the meshes for bounds.
+The top object has a constant `.childBnds` with the empty box (min `+DBL_MAX`, max `−DBL_MAX`). `/alembic` does not use it for bounds (**/alembic rule**).
 
 **Check**: demo (dump in [2.12](#212-data-types)).
 
 ### 6.4 The homogeneous flag does not mean "constant size"
 
-The writer replaces its "previous sample" record with the new sample, and then compares the new element count with the element count × extent of that **same** record. Thus:
+The writer replaces its "previous sample" record with the new sample, and then compares the new element count with the element count × extent stored in that record. That record belongs to the block that the sample uses, which can be a shared block of another property (2.11). In the demo files:
 
-- arrays with extent 1 (`.faceIndices`, `.faceCounts`, `.pointIds`, `.widths`) always have `0x400` set, but their size changes on each frame;
-- arrays with extent > 1 (`P`, `N`, `Pref`, `.velocities`) never have `0x400` set.
+- arrays with extent 1 (`.faceIndices`, `.faceCounts`, `.pointIds`, `.widths`) have `0x400` set. `.pointIds` and `.widths` change size on every frame. `.faceIndices` and `.faceCounts` change size on every frame except frame 164 (same size as frame 163);
+- arrays with extent > 1 (`P`, `N`, `Pref`, `.velocities`) have `0x400` clear.
 
-Find constant element counts by comparing sample sizes.
+Other cases, from the test file: a `float32[1]` array whose sample reuses a 12-byte `int8` block has `0x400` clear; a `V3f` array with only empty samples has `0x400` set.
 
-**Check**: src `AbcCoreOgawa/ApwImpl.cpp:185-203`, `AbcCoreOgawa/WriteUtil.cpp:268-269`, `AbcCoreOgawa/WrittenSampleMap.h:67-72`; demo (all 5 and 9 array properties).
+`/alembic` finds constant element counts by comparing sample sizes (**/alembic rule**).
+
+**Check**: src `AbcCoreOgawa/ApwImpl.cpp:185-203`, `AbcCoreOgawa/WriteUtil.cpp:268-269`, `AbcCoreOgawa/WrittenSampleMap.h:67-72`; demo (all 5 and 9 array properties; sizes of all samples); local test file ([section 8](#8-sources)).
 
 ### 6.5 `.selfBnds` of Points is the mesh bounds
 
-In `demo.abc`, all 250 `.selfBnds` samples of `/Cube/Liquid` point to the same blocks as the `.selfBnds` samples of `/Cube/Cube_241`. In 172 of 250 frames, some points of `Liquid` are outside these bounds. Do not use them as the bounds of the points: compute bounds from `P`.
+In `demo.abc`, all 250 `.selfBnds` samples of `/Cube/Liquid` point to the same blocks as the `.selfBnds` samples of `/Cube/Cube_241`. In 172 of 250 frames, some points of `Liquid` are outside these bounds. `/alembic` computes the bounds of points from `P` (**/alembic rule**).
 
 **Check**: demo (250 of 250 equal offsets; 172 of 250 frames fail the "contains all `P`" test).
 
 ### 6.6 Shared blocks
 
-Blocks are shared across properties and POD types ([2.11](#211-sample-keys-and-de-duplication)): `visible` shares its block with `.inherits`; 2 `.faceCounts` samples share earlier blocks; `demo.abc` has 506 shared references in total. A cache of decoded data with the block offset as key must also include the POD type and extent in the key, because the same bytes can have two types.
+Blocks are shared across properties and POD types ([2.11](#211-sample-keys-and-de-duplication)): `visible` shares its block with `.inherits`; 2 `.faceCounts` samples share earlier blocks; `demo.abc` has 506 shared references in total. The same bytes can have two types, so a cache of decoded data that uses the block offset as key also uses the POD type and extent in the key (**/alembic rule**).
 
 **Check**: demo.
 
@@ -1083,11 +1094,16 @@ Map of all bytes outside sample blocks. Sizes include the 8-byte `size` / `numCh
 
 - Alembic C++ library 1.8.12, <https://github.com/alembic/alembic>, commit `2d54c7c2c3ba4dd9f30215c9663f0ea1aa8fd2a5`. All **src** references use this commit.
 - Installed Alembic 1.8.12 (Homebrew): `abcls -r -l -t` output (object tree, schemas, time samplings) matches this document; `libAlembic` `MurmurHash3_x64_128` used for the key check in [2.11](#211-sample-keys-and-de-duplication).
-- Ginger Bill, "Reverse Engineering Alembic" (2022), <https://www.gingerbill.org/article/2022/07/11/reverse-engineering-alembic/>. A good overview of the Ogawa and Abc layers. Two parts do not agree with the C++ source and the demo data:
+- Ginger Bill, "Reverse Engineering Alembic" (2022), <https://www.gingerbill.org/article/2022/07/11/reverse-engineering-alembic/>. Two parts do not agree with the C++ source and the demo data:
   - It says the sample key "is represented as a 16-byte (128 bit) SpookyHash". The key is MurmurHash3 ([2.11](#211-sample-keys-and-de-duplication)).
   - Its `Property_Header` pseudo-code puts `next_sample_index`, `first_changed_index`, `last_changed_index` and `time_sampling_index` under `when Compound`. The C++ writer and reader store these fields only for scalar and array properties ([2.7](#27-property-headers)).
-- three.js `src/math/Matrix4.js` (dev branch), <https://raw.githubusercontent.com/mrdoob/three.js/dev/src/math/Matrix4.js>: "internally they are stored in the … elements array in column-major order"; `fromArray` copies `array[i + offset]` to `elements[i]`; `setPosition` writes `te[12]`, `te[13]`, `te[14]`.
-- three.js `src/renderers/webgl/WebGLState.js` (dev branch), <https://raw.githubusercontent.com/mrdoob/three.js/dev/src/renderers/webgl/WebGLState.js>: `reset()` calls `gl.frontFace( gl.CCW )`.
-- Khronos, OpenGL ES 2.0 `glFrontFace`, <https://registry.khronos.org/OpenGL-Refpages/es2.0/xhtml/glFrontFace.xml>: "The initial value is GL_CCW."
+- three.js, commit `b9108a0c8b20286aca332f6be128811ed395c58c` (the `dev` branch on 2026-11-01), files downloaded with `curl`:
+  - `src/math/Matrix4.js` (<https://raw.githubusercontent.com/mrdoob/three.js/b9108a0c8b20286aca332f6be128811ed395c58c/src/math/Matrix4.js>): line 82, comment on `this.elements`: "A column-major list of matrix values."; line 1270, `fromArray` parameter: "The matrix elements in column-major order."; lines 1274-1284, `fromArray` copies `array[ i + offset ]` to `this.elements[ i ]` for `i` 0…15; lines 706-726, `setPosition` writes `te[ 12 ]`, `te[ 13 ]`, `te[ 14 ]`.
+  - `src/renderers/WebGLRenderer.js` (<https://raw.githubusercontent.com/mrdoob/three.js/b9108a0c8b20286aca332f6be128811ed395c58c/src/renderers/WebGLRenderer.js>): line 1204, `const frontFaceCW = ( object.isMesh && object.matrixWorld.determinantAffine() < 0 );`; line 1208, `state.setMaterial( material, frontFaceCW );`.
+  - `src/renderers/webgl/WebGLState.js` (<https://raw.githubusercontent.com/mrdoob/three.js/b9108a0c8b20286aca332f6be128811ed395c58c/src/renderers/webgl/WebGLState.js>): lines 760-763, `let flipSided = ( material.side === BackSide ); if ( frontFaceCW ) flipSided = ! flipSided;` and `setFlipSided( flipSided );`; lines 794-812, `setFlipSided` does nothing unless `currentFlipSided !== flipSided`, then calls `gl.frontFace( gl.CW )` if `flipSided`, else `gl.frontFace( gl.CCW )`; line 1243, `reset()` calls `gl.frontFace( gl.CCW )`.
+  - `src/materials/Material.js` line 88: `this.side = FrontSide;`. `src/constants.js` lines 92 and 100: `export const FrontSide = 0;`, `export const BackSide = 1;`.
+- Khronos, OpenGL ES 2.0 `glFrontFace` (<https://registry.khronos.org/OpenGL-Refpages/es2.0/xhtml/glFrontFace.xml>, downloaded with `curl`): "Passing GL_CCW to mode selects counterclockwise polygons as front-facing;" and "The initial value is GL_CCW."
 - HDF5 2.2.0 (Homebrew): test file made with `H5Fcreate`, first 8 bytes read with `xxd`.
+- Local test file: a C++ program linked with `libAlembic` 1.8.12 writes one Ogawa archive with these array properties on the top object: `f` (`float32`, samples: empty, 3 values, empty), `i8` (`int8`, 12 zeros), `f2` (`float32`, 3 zeros, which reuses the `i8` block), `w` (`wstring`, `{"abcdefgh", "xyz"}`), `v3` (`V3f`, two empty samples). The walker decoded the file with 0 gaps and 0 overlaps.
+- Second local test file: the same kind of program writes `s` (`string` array, one empty sample), `w` (`wstring` array, one empty sample) and `one` (`float32` array, one sample with 1 value). The walker decoded it with 0 gaps and 0 overlaps.
 - The demo files, read by the walker script with the rules above ([section 7](#7-byte-accounting)).
