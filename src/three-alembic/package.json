@@ -1,0 +1,30 @@
+{
+  "name": "three-alembic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "three.js WebGL rendering of Alembic (.abc) files.",
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "build": "rollup --config ./rollup.config.js"
+  },
+  "dependencies": {
+    "alembic": "^0.0.0"
+  },
+  "peerDependencies": {
+    "three": ">=0.162.0"
+  },
+  "author": {
+    "name": "mjurczyk",
+    "url": "https://discourse.threejs.org/u/mjurczyk"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mjurczyk/alembic.git",
+    "directory": "src/three-alembic"
+  }
+}

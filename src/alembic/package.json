@@ -1,0 +1,24 @@
+{
+  "name": "alembic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Alembic (.abc) file reader in JavaScript. No dependencies.",
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "build": "rollup --config ./rollup.config.js"
+  },
+  "author": {
+    "name": "mjurczyk",
+    "url": "https://discourse.threejs.org/u/mjurczyk"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mjurczyk/alembic.git",
+    "directory": "src/alembic"
+  }
+}

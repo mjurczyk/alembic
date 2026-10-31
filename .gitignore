@@ -1,0 +1,8 @@
+# General
+node_modules
+build
+.DS_Store
+
+# Notes
+notes/
+session-notes/

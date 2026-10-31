@@ -1,0 +1,26 @@
+{
+  "name": "alembic-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Alembic for JavaScript: alembic (core .abc reader), three-alembic (three.js WebGL rendering), wabc (.abc -> .wabc CLI).",
+  "workspaces": [
+    "src/alembic",
+    "src/three-alembic",
+    "src/wabc"
+  ],
+  "scripts": {
+    "build": "npm run build -w alembic -w three-alembic -w wabc"
+  },
+  "author": {
+    "name": "mjurczyk",
+    "url": "https://discourse.threejs.org/u/mjurczyk"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@lopatnov/rollup-plugin-uglify": "^2.1.5",
+    "@rollup/plugin-node-resolve": "^14.1.0",
+    "rollup": "^2.79.1",
+    "rollup-plugin-copy": "^3.4.0",
+    "rollup-plugin-delete": "^2.0.0"
+  }
+}
