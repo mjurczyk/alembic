@@ -1,3 +1,4 @@
+import { createSchema } from '../schemas/Schemas.js';
 import { CompoundProperty } from './CompoundProperty.js';
 import { parseMetaData } from './MetaData.js';
 
@@ -12,6 +13,7 @@ export class AlembicObject {
   source;
   childrenCache = null;
   propertiesCache = null;
+  schemaCache = undefined;
 
   constructor(archive, parent, { name, metadata, source }) {
     this.archive = archive;
@@ -53,6 +55,15 @@ export class AlembicObject {
     }
 
     return this.propertiesCache;
+  }
+
+  // NOTE PolyMesh, Xform or Points. Null for other schemas.
+  get schema() {
+    if (this.schemaCache === undefined) {
+      this.schemaCache = createSchema(this);
+    }
+
+    return this.schemaCache;
   }
 
   getChild(name) {
