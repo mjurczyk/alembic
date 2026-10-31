@@ -83,12 +83,31 @@ const clipEars = (positions, faceIndices, start, count) => {
 // Alembic faces are clockwise, three.js front faces are counter-clockwise (FORMAT.md 3.2). Each triangle is reversed.
 export function* triangulateFaces(positions, faceIndices, faceCounts) {
   let numTriangles = 0;
+  let onlyTriangles = true;
 
   for (const count of faceCounts) {
     numTriangles += Math.max(count - 2, 0);
+    onlyTriangles = onlyTriangles && count === 3;
   }
 
   const triangles = new Uint32Array(numTriangles * 3);
+
+  // NOTE Fast path: corners a, b, c of each face give the triangle a, c, b
+  if (onlyTriangles) {
+    for (let start = 0; start < triangles.length; start += 3 * 4096) {
+      const end = Math.min(start + 3 * 4096, triangles.length);
+
+      for (let corner = start; corner < end; corner += 3) {
+        triangles[corner] = corner;
+        triangles[corner + 1] = corner + 2;
+        triangles[corner + 2] = corner + 1;
+      }
+
+      yield;
+    }
+
+    return triangles;
+  }
   let start = 0;
   let offset = 0;
 

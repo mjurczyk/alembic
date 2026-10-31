@@ -1,6 +1,6 @@
 import * as Three from 'three';
 import { loadAlembic } from 'alembic';
-import { ABCLoader } from 'three-alembic';
+import { ABCLoader, createVertexAnimationMaterial } from 'three-alembic';
 import { SimpleDropzone } from 'simple-dropzone';
 import { camera, controls } from '../main';
 import { dropTarget, getController, setGuiFields } from '../utils/gui';
@@ -12,7 +12,7 @@ let dropId = 0;
 
 const params = {
   playing: true,
-  fps: 24,
+  speed: 1.0,
   loop: true,
   frame: 0,
   time: 0.0,
@@ -20,18 +20,21 @@ const params = {
 };
 
 const originalMaterials = new Map();
+// NOTE Display materials also show the vertex animation of animated files
 const displayMaterials = {
-  normals: new Three.MeshNormalMaterial(),
-  uv: new Three.MeshBasicMaterial(),
+  normals: createVertexAnimationMaterial(new Three.MeshNormalMaterial()),
+  uv: createVertexAnimationMaterial(new Three.MeshBasicMaterial()),
   // NOTE Clear water: refraction (ior 1.333), reflections of the environment, blue tint that gets deeper with thickness
-  water: new Three.MeshPhysicalMaterial({
-    color: 0xffffff,
-    metalness: 0.0,
-    roughness: 0.03,
-    transmission: 1.0,
-    ior: 1.333,
-    attenuationColor: new Three.Color(0x6fc3df),
-  }),
+  water: createVertexAnimationMaterial(
+    new Three.MeshPhysicalMaterial({
+      color: 0xffffff,
+      metalness: 0.0,
+      roughness: 0.03,
+      transmission: 1.0,
+      ior: 1.333,
+      attenuationColor: new Three.Color(0x6fc3df),
+    })
+  ),
 };
 
 loaders.texture.load('./assets/uv-1-4K.jpg', (texture) => {
@@ -104,13 +107,10 @@ const setFieldValue = (id, value) => {
   }
 };
 
-// NOTE Frame and Time show the same sample. The field that was not changed follows the other one.
-// Fields show the requested frame. It is on screen when it is built.
-const showAnimationFrame = (frame) => {
-  model.frame = frame;
-
-  setFieldValue('frame', model.targetFrame);
-  setFieldValue('time', model.timeSampling.getSampleTime(model.targetFrame));
+// NOTE Frame and Time follow the time of the animation
+const showAnimationTime = () => {
+  setFieldValue('frame', model.frame);
+  setFieldValue('time', model.time);
 };
 
 const applyPlaybackParams = () => {
@@ -118,7 +118,7 @@ const applyPlaybackParams = () => {
     return;
   }
 
-  model.fps = params.fps;
+  model.speed = params.speed;
   model.loop = params.loop;
 
   if (params.playing) {
@@ -129,9 +129,7 @@ const applyPlaybackParams = () => {
 };
 
 const getPlaybackFields = () => {
-  const { totalFrames, timeSampling } = model;
-  const minTime = timeSampling.getSampleTime(0);
-  const maxTime = timeSampling.getSampleTime(totalFrames - 1);
+  const { totalFrames, startTime, endTime } = model;
 
   return [
     {
@@ -147,14 +145,14 @@ const getPlaybackFields = () => {
           },
         },
         {
-          id: 'fps',
-          name: 'FPS',
-          defaultValue: params.fps,
-          min: 1,
-          max: 120,
-          step: 1,
+          id: 'speed',
+          name: 'Speed',
+          defaultValue: params.speed,
+          min: -2.0,
+          max: 2.0,
+          step: 0.01,
           onChange: (value) => {
-            params.fps = value;
+            params.speed = value;
             applyPlaybackParams();
           },
         },
@@ -174,18 +172,21 @@ const getPlaybackFields = () => {
           min: 0,
           max: totalFrames - 1,
           step: 1,
-          onChange: (value) => showAnimationFrame(value),
+          onChange: (value) => {
+            model.frame = value;
+            setFieldValue('time', model.time);
+          },
         },
         {
           id: 'time',
           name: 'Time (s)',
           defaultValue: params.time,
-          min: minTime,
-          max: maxTime,
+          min: startTime,
+          max: endTime,
           step: 0.001,
           onChange: (value) => {
-            showAnimationFrame(timeSampling.getSampleIndex(value, totalFrames));
-            setFieldValue('time', value);
+            model.time = value;
+            setFieldValue('frame', model.frame);
           },
         },
       ],
@@ -223,9 +224,8 @@ const showModel = (group) => {
   });
 
   if (model.isABCAnimation) {
-    params.fps = Math.round(model.fps);
     params.frame = model.frame;
-    params.time = model.timeSampling.getSampleTime(model.frame);
+    params.time = model.time;
   }
 
   applyDisplay();
@@ -322,20 +322,22 @@ export const exampleABC = ({ scene }) => {
 
   let lastTime = performance.now();
 
-  setInterval(() => {
-    const now = performance.now();
-
-    if (model?.isABCAnimation) {
-      const previousFrame = model.targetFrame;
-
+  // NOTE Once for each drawn frame, so the blend between samples moves smoothly
+  const update = (now) => {
+    if (model?.isABCAnimation && model.playing) {
       model.update((now - lastTime) / 1000.0);
+      showAnimationTime();
 
-      if (model.targetFrame !== previousFrame) {
-        setFieldValue('frame', model.targetFrame);
-        setFieldValue('time', model.timeSampling.getSampleTime(model.targetFrame));
+      // NOTE Without loop, the playback stops at the end
+      if (!model.playing) {
+        params.playing = false;
+        setFieldValue('playing', false);
       }
     }
 
     lastTime = now;
-  }, 1000 / 60);
+    requestAnimationFrame(update);
+  };
+
+  requestAnimationFrame(update);
 };

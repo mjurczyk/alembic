@@ -1,23 +1,15 @@
 import * as Three from 'three';
 import { createPointsGeometry } from '../geometry/PointsGeometry.js';
 import { createPolyMeshGeometry } from '../geometry/PolyMeshGeometry.js';
+import { decomposeExact } from './matrices.js';
 
 const identity = new Three.Matrix4();
-const composed = new Three.Matrix4();
 
 // NOTE Position, rotation and scale of the node come from the matrix.
 // A matrix with shear has no exact position, rotation and scale, so the node keeps the matrix.
 const setNodeMatrix = (node, matrix) => {
-  matrix.decompose(node.position, node.quaternion, node.scale);
-  composed.compose(node.position, node.quaternion, node.scale);
-
-  const maxElement = Math.max(...matrix.elements.map(Math.abs));
-  const isExact = composed.elements.every(
-    (element, index) => Math.abs(element - matrix.elements[index]) <= maxElement * 1e-6
-  );
-
+  node.matrixAutoUpdate = decomposeExact(matrix, node.position, node.quaternion, node.scale);
   node.matrix.copy(matrix);
-  node.matrixAutoUpdate = isExact;
 };
 
 // NOTE True if a sample of the schema can be different from the first sample
@@ -31,26 +23,42 @@ const isAnimated = (schema) => {
   return !schema.isConstant || parameters.some((parameter) => !parameter.isConstant);
 };
 
-// NOTE Entries are in tree order: a parent comes before its children
+// NOTE Tree order: a parent comes before its children. "matrix" is "localMatrix" with the transforms of the parents.
 export const collectEntries = (object, parent = null, entries = []) => {
-  const entry = { object, parent, node: null, matrix: identity, xformSample: null };
+  const entry = {
+    object,
+    parent,
+    node: null,
+    matrix: identity,
+    localMatrix: null,
+    inherits: true,
+    animated: isAnimated(object.schema),
+  };
 
-  entry.animated = isAnimated(object.schema);
   entries.push(entry);
   object.children.forEach((child) => collectEntries(child, entry, entries));
 
   return entries;
 };
 
-// NOTE The animated schema with the most samples. Its samples are the frames.
+// NOTE Time range of all animated schemas. Frames are the samples of the animated schema with the most samples.
 export const getTimeline = (entries) =>
   entries
     .filter(({ animated }) => animated)
     .map(({ object }) => object.schema)
     .reduce(
-      (longest, { numSamples, timeSampling }) =>
-        numSamples > longest.numSamples ? { numSamples, timeSampling } : longest,
-      { numSamples: 1, timeSampling: null }
+      (timeline, { numSamples, timeSampling }) => {
+        const isLongest = numSamples > timeline.numSamples;
+        const lastIndex = timeSampling.getLastIndex(numSamples);
+
+        return {
+          numSamples: isLongest ? numSamples : timeline.numSamples,
+          timeSampling: isLongest ? timeSampling : timeline.timeSampling,
+          startTime: Math.min(timeSampling.getSampleTime(0), timeline.startTime),
+          endTime: Math.max(timeSampling.getSampleTime(lastIndex), timeline.endTime),
+        };
+      },
+      { numSamples: 1, timeSampling: null, startTime: Infinity, endTime: -Infinity }
     );
 
 export const setNodeInfo = (node, object) => {
@@ -95,47 +103,50 @@ const setPointsSize = (material, sample) => {
 };
 
 // NOTE Matrix of each Xform node. A transform with "inherits" false uses the transforms of its parents.
-const applyMatrices = (entries) => {
+export const applyMatrices = (entries) => {
   entries.forEach((entry) => {
-    const { node, parent, xformSample } = entry;
+    const { node, parent, localMatrix, inherits } = entry;
     const parentMatrix = parent ? parent.matrix : identity;
 
     entry.matrix = parentMatrix;
 
-    if (!xformSample) {
+    if (!localMatrix) {
       return;
     }
 
-    const localMatrix = new Three.Matrix4().fromArray(xformSample.matrix);
+    const nodeMatrix = localMatrix.clone();
 
     // NOTE "inherits" false: the transform ignores the transforms of its parents
-    if (xformSample.inherits) {
+    if (inherits) {
       entry.matrix = parentMatrix.clone().multiply(localMatrix);
     } else {
       entry.matrix = localMatrix.clone();
 
       if (parentMatrix.determinant() !== 0) {
-        localMatrix.premultiply(parentMatrix.clone().invert());
+        nodeMatrix.premultiply(parentMatrix.clone().invert());
       }
     }
 
-    setNodeMatrix(node, localMatrix);
+    setNodeMatrix(node, nodeMatrix);
   });
 };
 
-// NOTE readSample( schema ) gives the sample to show. With onlyAnimated, constant objects keep their sample.
-// Yields after each part of the work (see runProgressive). Nodes change only at the end, all at the same time.
-export function* applySamples(entries, readSample, { onlyAnimated = false } = {}) {
+export const disposeUpdates = (updates) => {
+  updates.forEach(({ geometry }) => geometry?.dispose());
+};
+
+// NOTE Updates for applyUpdates, built in parts (see runProgressive). If cancelled, it disposes its new geometries.
+export function* buildUpdates(entries, readSample) {
   const updates = [];
-  let isApplied = false;
+  let isDone = false;
 
   try {
     for (const entry of entries) {
-      const { object, animated } = entry;
+      const { object } = entry;
       const { schema } = object;
       const type = schema?.type;
 
-      if (!type || (onlyAnimated && !animated)) {
+      if (!type) {
         continue;
       }
 
@@ -159,29 +170,39 @@ export function* applySamples(entries, readSample, { onlyAnimated = false } = {}
       }
     }
 
-    updates.forEach(({ entry, sample, geometry }) => {
-      const { node } = entry;
+    isDone = true;
 
-      if (!geometry) {
-        entry.xformSample = sample;
-
-        return;
-      }
-
-      node.geometry.dispose();
-      node.geometry = geometry;
-
-      if (node.isPoints) {
-        setPointsSize(node.material, sample);
-      }
-    });
-
-    applyMatrices(entries);
-    isApplied = true;
+    return updates;
   } finally {
-    // NOTE Cancelled: the new geometries are not used
-    if (!isApplied) {
-      updates.forEach(({ geometry }) => geometry?.dispose());
+    if (!isDone) {
+      disposeUpdates(updates);
     }
   }
+}
+
+// NOTE Nodes get the new samples, and their old geometries are disposed. Call applyMatrices after Xform updates.
+export const applyUpdates = (updates) => {
+  updates.forEach(({ entry, sample, geometry }) => {
+    const { node } = entry;
+
+    if (!geometry) {
+      entry.localMatrix = sample ? new Three.Matrix4().fromArray(sample.matrix) : null;
+      entry.inherits = sample ? sample.inherits : true;
+
+      return;
+    }
+
+    node.geometry.dispose();
+    node.geometry = geometry;
+
+    if (node.isPoints) {
+      setPointsSize(node.material, sample);
+    }
+  });
+};
+
+// NOTE Builds and shows the samples of the entries. Nodes change only at the end, all at the same time.
+export function* applySamples(entries, readSample) {
+  applyUpdates(yield* buildUpdates(entries, readSample));
+  applyMatrices(entries);
 }

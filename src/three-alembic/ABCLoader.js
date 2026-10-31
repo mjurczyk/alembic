@@ -15,12 +15,8 @@ const defaultOptions = {
   // NOTE Seconds. If set, it is used instead of sampleIndex.
   time: null,
   timeMode: 'floor',
-};
-
-const timeIndexMethods = {
-  floor: 'getSampleIndex',
-  ceil: 'getCeilIndex',
-  nearest: 'getNearestIndex',
+  // NOTE Memory limit of the vertex animation texture of one object, in bytes
+  textureMemory: 256 * 1024 * 1024,
 };
 
 class ABCLoader extends Three.Loader {
@@ -30,7 +26,7 @@ class ABCLoader extends Three.Loader {
     super(manager);
   }
 
-  // NOTE { sampleIndex, time, timeMode }. timeMode is 'floor', 'ceil' or 'nearest'.
+  // NOTE { sampleIndex, time, timeMode, textureMemory }. timeMode is 'floor', 'ceil' or 'nearest'.
   setOptions(options) {
     this.options = { ...this.options, ...options };
 
@@ -82,12 +78,11 @@ class ABCLoader extends Three.Loader {
     });
 
     // NOTE Built in parts, so the page keeps its frame rate
-    await runProgressive(applySamples(entries, (schema) => this.readSample(schema))).promise;
+    const generator = animation
+      ? animation.setup(this.getStartTime(timeline), this.options)
+      : applySamples(entries, (schema) => this.readSample(schema));
 
-    if (animation) {
-      animation.currentFrame = this.getFrame(timeline);
-      animation.targetFrame = animation.currentFrame;
-    }
+    await runProgressive(generator).promise;
 
     return entries[0].node;
   }
@@ -98,13 +93,13 @@ class ABCLoader extends Three.Loader {
     return time === null ? schema.getSample(sampleIndex) : schema.getSampleAtTime(time, timeMode);
   }
 
-  // NOTE Frame of the animation for the options
-  getFrame({ numSamples, timeSampling }) {
-    const { sampleIndex, time, timeMode } = this.options;
+  // NOTE Start time of an animation: "time", or the time of frame "sampleIndex"
+  getStartTime({ numSamples, timeSampling }) {
+    const { sampleIndex, time } = this.options;
 
     return time === null
-      ? Math.min(sampleIndex, numSamples - 1)
-      : timeSampling[timeIndexMethods[timeMode]](time, numSamples);
+      ? timeSampling.getSampleTime(Math.min(sampleIndex, timeSampling.getLastIndex(numSamples)))
+      : time;
   }
 }
 
