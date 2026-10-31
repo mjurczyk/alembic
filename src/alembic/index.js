@@ -1,7 +1,22 @@
+import { AlembicArchive } from './core/AlembicArchive.js';
 import { AlembicError } from './core/AlembicError.js';
+import { AlembicObject } from './core/AlembicObject.js';
 import { AlembicReader } from './core/AlembicReader.js';
+import { ArrayProperty } from './core/ArrayProperty.js';
+import { CompoundProperty } from './core/CompoundProperty.js';
+import { ScalarProperty } from './core/ScalarProperty.js';
+import { TimeSampling } from './core/TimeSampling.js';
 
-export { AlembicError, AlembicReader };
+export {
+  AlembicArchive,
+  AlembicError,
+  AlembicObject,
+  AlembicReader,
+  ArrayProperty,
+  CompoundProperty,
+  ScalarProperty,
+  TimeSampling,
+};
 
 export const loadAlembic = async (url) => {
   const response = await fetch(url);
