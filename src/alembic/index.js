@@ -4,8 +4,13 @@ import { AlembicObject } from './core/AlembicObject.js';
 import { AlembicReader } from './core/AlembicReader.js';
 import { ArrayProperty } from './core/ArrayProperty.js';
 import { CompoundProperty } from './core/CompoundProperty.js';
+import { fetchBytes } from './core/fetchBytes.js';
 import { ScalarProperty } from './core/ScalarProperty.js';
 import { TimeSampling } from './core/TimeSampling.js';
+import { GeomParam, GeomParamSample } from './schemas/GeomParam.js';
+import { Points } from './schemas/Points.js';
+import { PolyMesh } from './schemas/PolyMesh.js';
+import { Xform } from './schemas/Xform.js';
 
 export {
   AlembicArchive,
@@ -14,18 +19,28 @@ export {
   AlembicReader,
   ArrayProperty,
   CompoundProperty,
+  GeomParam,
+  GeomParamSample,
+  Points,
+  PolyMesh,
   ScalarProperty,
   TimeSampling,
+  Xform,
 };
 
+// NOTE Network, HTTP and read errors give an AlembicError with the URL. "cause" has the original error.
 export const loadAlembic = async (url) => {
-  const response = await fetch(url);
+  let source;
 
-  if (!response.ok) {
-    throw new AlembicError(`Could not load ${url} (${response.status}).`);
+  try {
+    source = await fetchBytes(url);
+  } catch (error) {
+    throw new AlembicError(`Could not load ${url}. ${error.message}`, { cause: error });
   }
 
-  const source = new Uint8Array(await response.arrayBuffer());
-
-  return new AlembicReader().read(source);
+  try {
+    return await new AlembicReader().read(source);
+  } catch (error) {
+    throw new AlembicError(`Could not read ${url}. ${error.message}`, { cause: error });
+  }
 };

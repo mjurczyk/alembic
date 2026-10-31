@@ -3,6 +3,8 @@
 Alembic (`.abc`) file reader in JavaScript. No dependencies, no renderer.
 
 - `loadAlembic( url )`, `AlembicReader` - read `.abc` files. `reader.archive.root` is the top object of the file, `reader.archive.findObject( path )` finds an object by its path (for example `'/Cube/Cube_241'`), and `reader.archive.metadata` has the file information (for example the application that saved the file).
-- `AlembicObject` - an object of the file (for example a mesh or a transform). Objects have `name`, `fullName` (path), `metadata`, `children`, `getChild( name )` and `properties`.
+- `AlembicObject` - an object of the file (for example a mesh or a transform). Objects have `name`, `fullName` (path), `metadata`, `children`, `getChild( name )`, `properties` and `schema`.
+- `PolyMesh`, `Xform`, `Points` - `object.schema` of meshes, transforms and points (`null` for other objects). `schema.getSample( index )` and `schema.getSampleAtTime( time, mode )` give the mesh, the 4x4 matrix, or the points of a frame. `mode` is `'floor'` (default), `'ceil'` or `'nearest'`.
+- `GeomParam`, `GeomParamSample` - normals, uvs and widths. `sample.normals.getExpandedValues()` gives one value for each item of the scope (for example, for each face corner).
 - `CompoundProperty`, `ScalarProperty`, `ArrayProperty` - object data. `properties.get( name )` gives a property. `property.getSample( index )` gives the values of a frame: typed arrays (for example `Float32Array`), or an `Array` of strings for text. Array properties give `{ values, dimensions }`.
-- `TimeSampling` - `property.timeSampling.getSampleTime( index )` gives the time of a frame, in seconds. `getSampleIndex( time, numSamples )` gives the frame shown at the given time.
+- `TimeSampling` - `property.timeSampling.getSampleTime( index )` gives the time of a frame, in seconds. `getSampleIndex( time, numSamples )` gives the frame shown at the given time. `getBlend( time, numSamples )` gives the frames before and after the time, and `alpha` (`0` to `1`) to blend them.
