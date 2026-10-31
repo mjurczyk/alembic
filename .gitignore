@@ -6,3 +6,6 @@ build
 # Notes
 notes/
 session-notes/
+
+# Demo files
+*.abc
