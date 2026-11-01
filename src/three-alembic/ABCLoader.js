@@ -1,5 +1,5 @@
 import * as Three from 'three';
-import { AlembicReader, loadAlembic } from 'alembic';
+import { AlembicReader, loadAlembic } from 'alembic-web';
 import { ABCAnimation } from './ABCAnimation.js';
 import {
   applySamples,

@@ -1,8 +1,7 @@
 {
-  "name": "alembic",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Alembic (.abc) file reader in JavaScript. No dependencies.",
+  "name": "alembic-web",
+  "version": "0.1.0",
+  "description": "Alembic (.abc) and .wabc file reader in JavaScript. No dependencies.",
   "main": "./index.js",
   "module": "./index.js",
   "exports": {
@@ -11,6 +10,16 @@
   "scripts": {
     "build": "rollup --config ./rollup.config.js"
   },
+  "keywords": [
+    "alembic",
+    "abc",
+    "wabc",
+    "blender",
+    "houdini",
+    "mesh",
+    "points",
+    "animation"
+  ],
   "author": {
     "name": "mjurczyk",
     "url": "https://discourse.threejs.org/u/mjurczyk"

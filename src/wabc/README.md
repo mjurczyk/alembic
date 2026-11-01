@@ -1,6 +1,6 @@
-# wabc
+# webabc
 
-The `wabc` CLI. Converts `.abc` files into web-optimised `.wabc` files. Needs only Node.js.
+The `wabc` CLI (`npm install -g webabc`). Converts `.abc` files into web-optimised `.wabc` files. Needs only Node.js.
 
 ```
 wabc <input>... [options]

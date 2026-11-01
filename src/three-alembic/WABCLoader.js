@@ -1,5 +1,5 @@
 import * as Three from 'three';
-import { WabcFile, loadWabc } from 'alembic';
+import { WabcFile, loadWabc } from 'alembic-web';
 import { WABCAnimation, applySampleArrays } from './WABCAnimation.js';
 import { WabcWorkers } from './wabc/WabcWorkers.js';
 

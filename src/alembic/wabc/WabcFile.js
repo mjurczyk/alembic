@@ -266,20 +266,24 @@ class GeometryTrack {
   }
 
   // NOTE Signs, crossed edges and edge codes of a surface sample. A sample needs the signs of the sample before it,
-  // so samples are decoded in order (FORMAT.md 7). The result of every "checkpointInterval"-th sample is kept, so a
-  // sample before the last one starts from there. The result is used again: do not change its arrays.
+  // so samples are decoded in order (FORMAT.md 7). The result of every "checkpointInterval"-th sample is kept. A sample
+  // starts from the last kept result before it, if that is nearer than the last decoded sample. The result is used
+  // again: do not change its arrays.
   async decodeSurface(sample) {
     const { samples, tBits, volume } = this.track;
     const interval = this.file.checkpointInterval;
 
     this.checkpoints ??= new Map();
 
-    if (!this.surfaceState || this.surfaceState.sample > sample) {
-      const start = Math.floor(sample / interval) * interval;
-      const checkpoint = [...this.checkpoints.keys()]
-        .filter((key) => key <= start)
-        .sort((a, b) => b - a)[0];
+    const checkpoint = [...this.checkpoints.keys()]
+      .filter((key) => key <= sample)
+      .sort((a, b) => b - a)[0];
 
+    if (
+      !this.surfaceState ||
+      this.surfaceState.sample > sample ||
+      (checkpoint ?? -1) > this.surfaceState.sample
+    ) {
       this.surfaceState =
         checkpoint === undefined
           ? { sample: -1, decoded: null }

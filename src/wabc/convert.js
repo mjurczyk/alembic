@@ -1,7 +1,16 @@
-import { closeSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { brotliCompressSync, constants as zlibConstants, deflateSync } from 'node:zlib';
-import { AlembicReader, WabcCodec } from 'alembic';
+import { AlembicReader, WabcCodec } from 'alembic-web';
 import { createLayout, decodePositions, encodeGeometry, encodeLayer } from './encode.js';
 import { readFileInParts, getSha256 } from './files.js';
 import { areEqual, identity, invert, isIdentity, multiply, toF32 } from './matrices.js';
@@ -24,7 +33,10 @@ import {
   toHeaderTimeSampling,
 } from './timeSamplings.js';
 
-const writer = 'wabc 0.0.0';
+// NOTE "writer" of the header: name and version of this package. package.json is next to this file in the source and
+// next to cli.mjs in the built package.
+const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const writer = `${packageJson.name} ${packageJson.version}`;
 // NOTE Largest layer width. The writer selects the width (FORMAT.md 3.10).
 const maxLayerWidth = 4096;
 // NOTE Bytes copied from the data file to the output in one part

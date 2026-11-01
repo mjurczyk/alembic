@@ -1,5 +1,5 @@
 import * as Three from 'three';
-import { AlembicError } from 'alembic';
+import { AlembicError } from 'alembic-web';
 import { triangulateFaces } from './triangulate.js';
 
 // NOTE Items between two yields (see runProgressive)

@@ -1,4 +1,4 @@
-import { WabcCodec, WabcFile, computeSmoothNormals } from 'alembic';
+import { WabcCodec, WabcFile, computeSmoothNormals } from 'alembic-web';
 
 // NOTE Jobs of the .wabc workers (WabcWorkers). The same code runs in a worker and, without workers, in the page.
 // Results are typed arrays for a BufferGeometry: counter-clockwise triangles, as three.js front faces.
