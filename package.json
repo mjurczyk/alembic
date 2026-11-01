@@ -1,8 +1,8 @@
 {
   "name": "alembic-workspace",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
-  "description": "Alembic for JavaScript: alembic (core .abc reader), three-alembic (three.js WebGL rendering), wabc (.abc -> .wabc CLI).",
+  "description": "Alembic for JavaScript: alembic-web (core .abc and .wabc reader), three-alembic (three.js rendering), webabc (.abc -> .wabc CLI).",
   "workspaces": [
     "src/alembic",
     "src/three-alembic",
@@ -10,7 +10,8 @@
     "src/docs/examples"
   ],
   "scripts": {
-    "build": "npm run build -w alembic -w three-alembic -w wabc",
+    "build": "npm run build -w alembic-web -w three-alembic -w webabc",
+    "build:examples": "npm run build -w alembic-examples",
     "dev": "npm run dev -w alembic-examples"
   },
   "author": {

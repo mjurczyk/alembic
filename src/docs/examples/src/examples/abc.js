@@ -1,10 +1,10 @@
 import * as Three from 'three';
-import { loadAlembic, loadWabc } from 'alembic';
+import { WabcFile, loadAlembic, loadWabc } from 'alembic-web';
 import { ABCLoader, WABCLoader, createVertexAnimationMaterial } from 'three-alembic';
 import { SimpleDropzone } from 'simple-dropzone';
 import { camera, controls } from '../main';
 import { dropTarget, getController, setGuiFields } from '../utils/gui';
-import { setLoading } from '../utils/loading';
+import { fetchWithProgress, setLoading, setLoadingProgress } from '../utils/loading';
 import { loadEnvironment, loaders } from '../utils/resources';
 
 let targetScene, model;
@@ -16,10 +16,10 @@ const isAnimation = (object) => object?.isABCAnimation || object?.isWABCAnimatio
 
 const params = {
   playing: true,
-  speed: 1.0,
+  // NOTE Frames per second of the playback. A new file starts at the fps of the file.
+  fps: 24,
   loop: true,
   frame: 0,
-  time: 0.0,
   display: 'water',
   compare: 'wabc',
   errorScale: 1.0,
@@ -239,8 +239,12 @@ const removeModel = () => {
   model = null;
 };
 
-// NOTE Camera looks at the model from the side, at a distance that shows all of it
-const frameModel = () => {
+// NOTE Camera looks at the model from the side, at a distance that shows all of it.
+// "direction" is the side of the camera; "height" moves the camera up, in scene units.
+const defaultView = { direction: new Three.Vector3(-1.0, 0.7, 1.0), height: 0.0 };
+const demoView = { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 };
+
+const frameModel = ({ direction, height } = defaultView) => {
   const box = new Three.Box3().setFromObject(model);
 
   if (box.isEmpty()) {
@@ -255,7 +259,8 @@ const frameModel = () => {
   displayMaterials.water.attenuationDistance = radius * 2.0;
 
   controls.target.copy(center);
-  camera.position.copy(center).add(new Three.Vector3(-1.0, 0.7, 1.0).setLength(radius * 2.5));
+  camera.position.copy(center).add(direction.clone().setLength(radius * 2.5));
+  camera.position.y += height;
   camera.near = radius / 100.0;
   camera.far = radius * 100.0;
   camera.updateProjectionMatrix();
@@ -272,10 +277,9 @@ const setFieldValue = (id, value) => {
   }
 };
 
-// NOTE Frame and Time follow the time of the animation
+// NOTE Frame follows the time of the animation
 const showAnimationTime = () => {
   setFieldValue('frame', model.frame);
-  setFieldValue('time', model.time);
 };
 
 const applyPlaybackParams = () => {
@@ -283,7 +287,7 @@ const applyPlaybackParams = () => {
     return;
   }
 
-  model.speed = params.speed;
+  model.fps = params.fps;
   model.loop = params.loop;
 
   if (params.playing) {
@@ -294,7 +298,7 @@ const applyPlaybackParams = () => {
 };
 
 const getPlaybackFields = () => {
-  const { totalFrames, startTime, endTime } = model;
+  const { totalFrames } = model;
 
   return [
     {
@@ -310,14 +314,14 @@ const getPlaybackFields = () => {
           },
         },
         {
-          id: 'speed',
-          name: 'Speed',
-          defaultValue: params.speed,
-          min: -2.0,
-          max: 2.0,
-          step: 0.01,
+          id: 'fps',
+          name: 'FPS',
+          defaultValue: params.fps,
+          min: 1,
+          max: 120,
+          step: 1,
           onChange: (value) => {
-            params.speed = value;
+            params.fps = value;
             applyPlaybackParams();
           },
         },
@@ -339,19 +343,6 @@ const getPlaybackFields = () => {
           step: 1,
           onChange: (value) => {
             model.frame = value;
-            setFieldValue('time', model.time);
-          },
-        },
-        {
-          id: 'time',
-          name: 'Time (s)',
-          defaultValue: params.time,
-          min: startTime,
-          max: endTime,
-          step: 0.001,
-          onChange: (value) => {
-            model.time = value;
-            setFieldValue('frame', model.frame);
           },
         },
       ],
@@ -417,7 +408,7 @@ const showGui = () => {
   ]);
 };
 
-const showModel = (group, referenceGroup = null) => {
+const showModel = (group, referenceGroup = null, view = defaultView) => {
   model = group;
   reference = referenceGroup;
   model.traverse((child) => {
@@ -441,33 +432,33 @@ const showModel = (group, referenceGroup = null) => {
 
   if (isAnimation(model)) {
     params.frame = model.frame;
-    params.time = model.time;
+    params.fps = Math.round(model.fileFps);
   }
 
   applyDisplay();
   applyPlaybackParams();
   targetScene.add(model);
-  frameModel();
+  frameModel(view);
   showGui();
 };
 
 const readAbc = (url) => loadAlembic(url).then((reader) => new ABCLoader().parse(reader));
 const readWabc = (url) => loadWabc(url).then((file) => new WABCLoader().parse(file));
 
-// NOTE A .wabc file is shown; a .abc file dropped with it is the reference of the comparison
-const loadFiles = ({ abcFile, wabcFile }) => {
+// NOTE The default demo, shown until a file is dropped
+const demoUrl = './assets/demo-water.wabc';
+
+// NOTE load() gives [abcGroup, wabcGroup]. A newer load or drop cancels this one.
+const loadGroups = ({ names, load, onEnd, view }) => {
   const currentDropId = ++dropId;
-  const urls = [abcFile, wabcFile].filter(Boolean).map((file) => URL.createObjectURL(file));
-  const [abcUrl, wabcUrl] = [abcFile ? urls[0] : null, wabcFile ? urls.at(-1) : null];
   const startTime = performance.now();
-  const names = [abcFile?.name, wabcFile?.name].filter(Boolean).join(' + ');
 
   removeModel();
   showGui();
   setLoading('abc', true);
   dropTarget.innerHTML = '[Loading file - please wait...]';
 
-  Promise.all([abcUrl ? readAbc(abcUrl) : null, wabcUrl ? readWabc(wabcUrl) : null])
+  load()
     .then(([abcGroup, wabcGroup]) => {
       if (currentDropId !== dropId) {
         [abcGroup, wabcGroup].forEach((group) => group && isAnimation(group) && group.dispose());
@@ -479,7 +470,7 @@ const loadFiles = ({ abcFile, wabcFile }) => {
 
       dropTarget.innerHTML = '[Drop .ABC or .WABC here]';
       params.compare = abcGroup && wabcGroup ? 'both' : 'wabc';
-      showModel(wabcGroup ?? abcGroup, wabcGroup ? abcGroup : null);
+      showModel(wabcGroup ?? abcGroup, wabcGroup ? abcGroup : null, view);
     })
     .catch((error) => {
       if (currentDropId === dropId) {
@@ -489,12 +480,36 @@ const loadFiles = ({ abcFile, wabcFile }) => {
       console.error(error);
     })
     .finally(() => {
-      urls.forEach((url) => URL.revokeObjectURL(url));
+      onEnd?.();
 
       if (currentDropId === dropId) {
         setLoading('abc', false);
       }
     });
+};
+
+// NOTE A .wabc file is shown; a .abc file dropped with it is the reference of the comparison
+const loadFiles = ({ abcFile, wabcFile }) => {
+  const urls = [abcFile, wabcFile].filter(Boolean).map((file) => URL.createObjectURL(file));
+  const [abcUrl, wabcUrl] = [abcFile ? urls[0] : null, wabcFile ? urls.at(-1) : null];
+
+  loadGroups({
+    names: [abcFile?.name, wabcFile?.name].filter(Boolean).join(' + '),
+    load: () => Promise.all([abcUrl ? readAbc(abcUrl) : null, wabcUrl ? readWabc(wabcUrl) : null]),
+    onEnd: () => urls.forEach((url) => URL.revokeObjectURL(url)),
+  });
+};
+
+// NOTE The demo file is large. The loading indicator shows the download progress.
+const loadDemo = () => {
+  loadGroups({
+    names: demoUrl,
+    view: demoView,
+    load: () =>
+      fetchWithProgress(demoUrl, setLoadingProgress).then((bytes) =>
+        Promise.all([null, new WABCLoader().parse(new WabcFile(bytes))])
+      ),
+  });
 };
 
 const dropzone = new SimpleDropzone(dropTarget, document.createElement('input'));
@@ -538,6 +553,8 @@ export const exampleABC = ({ scene }) => {
   loaders.gltf.load('./assets/demo-rock.glb', (gltf) => {
     scene.add(gltf.scene);
   });
+
+  loadDemo();
 
   let lastTime = performance.now();
 

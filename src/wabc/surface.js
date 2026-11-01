@@ -1,4 +1,4 @@
-import { WabcCodec } from 'alembic';
+import { WabcCodec } from 'alembic-web';
 
 const { cornerOffsets, getCellCase, getLocalEdge } = WabcCodec;
 

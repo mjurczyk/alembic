@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --config ./dev.config.js"
+    "dev": "vite --config ./dev.config.js",
+    "build": "vite build --config ./prod.config.js",
+    "preview": "vite preview --config ./prod.config.js"
   },
   "devDependencies": {
     "lil-gui": "^0.18.1",
@@ -14,7 +16,7 @@
     "vite": "^6.4.5"
   },
   "dependencies": {
-    "alembic": "^0.0.0",
-    "three-alembic": "^0.0.0"
+    "alembic-web": "^0.1.0",
+    "three-alembic": "^0.1.0"
   }
 }

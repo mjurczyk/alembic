@@ -1,8 +1,7 @@
 {
   "name": "three-alembic",
-  "version": "0.0.0",
-  "private": true,
-  "description": "three.js WebGL rendering of Alembic (.abc) files.",
+  "version": "0.1.0",
+  "description": "three.js rendering of Alembic (.abc) and .wabc files: loaders, animation, vertex animation materials.",
   "main": "./index.js",
   "module": "./index.js",
   "exports": {
@@ -12,11 +11,20 @@
     "build": "rollup --config ./rollup.config.js"
   },
   "dependencies": {
-    "alembic": "^0.0.0"
+    "alembic-web": "^0.1.0"
   },
   "peerDependencies": {
     "three": ">=0.162.0"
   },
+  "keywords": [
+    "alembic",
+    "abc",
+    "wabc",
+    "threejs",
+    "webgpu",
+    "tsl",
+    "animation"
+  ],
   "author": {
     "name": "mjurczyk",
     "url": "https://discourse.threejs.org/u/mjurczyk"

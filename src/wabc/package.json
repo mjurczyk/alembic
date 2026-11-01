@@ -1,14 +1,22 @@
 {
-  "name": "wabc",
-  "version": "0.0.0",
-  "private": true,
+  "name": "webabc",
+  "version": "0.1.0",
   "description": "CLI that converts Alembic (.abc) files into web-optimised .wabc files.",
   "scripts": {
     "build": "rollup --config ./rollup.config.js"
   },
   "dependencies": {
-    "alembic": "^0.0.0"
+    "alembic-web": "^0.1.0"
   },
+  "keywords": [
+    "webabc",
+    "wabc",
+    "alembic",
+    "abc",
+    "cli",
+    "blender",
+    "houdini"
+  ],
   "author": {
     "name": "mjurczyk",
     "url": "https://discourse.threejs.org/u/mjurczyk"

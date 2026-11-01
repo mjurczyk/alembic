@@ -4,6 +4,9 @@ import * as Three from 'three';
 const timeEpsilon = 1e-5;
 // NOTE Samples read before they are needed, in the playback direction
 const lookahead = 6;
+// NOTE Reads of one node at the same time. When the time jumps (a slider), old reads do not wait in a queue before
+// the new sample. When a read ends, the next sample of the window is asked for.
+const maxRequests = 2;
 // NOTE Spare room in a GPU buffer that grows
 const growth = 1.25;
 
@@ -225,6 +228,10 @@ export class WABCAnimation extends Three.Group {
     }
 
     for (const sample of window) {
+      if (entry.requested.size >= maxRequests) {
+        break;
+      }
+
       if (!entry.cache.has(sample) && !entry.requested.has(sample)) {
         entry.requested.add(sample);
         entry
@@ -238,7 +245,13 @@ export class WABCAnimation extends Three.Group {
             this.showWanted(entry);
           })
           .catch((error) => console.error(error))
-          .finally(() => entry.requested.delete(sample));
+          .finally(() => {
+            entry.requested.delete(sample);
+
+            if (!this.disposed) {
+              this.requestAhead(entry);
+            }
+          });
       }
     }
   }

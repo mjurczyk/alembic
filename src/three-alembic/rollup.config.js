@@ -5,9 +5,9 @@ import { createLibraryConfigs, getOutputDir } from '../../rollup.shared.js';
 export default [
   ...createLibraryConfigs({
     name: 'three-alembic',
-    external: ['three', /^three\//, 'alembic'],
+    external: ['three', /^three\//, 'alembic-web'],
   }),
-  // NOTE The .wabc worker is its own file next to index.js (new URL('./wabcWorker.js', import.meta.url)), with alembic in it
+  // NOTE The .wabc worker is its own file next to index.js (new URL('./wabcWorker.js', import.meta.url)), with alembic-web in it
   {
     input: './wabc/wabcWorker.js',
     output: { file: `${getOutputDir('three-alembic')}/wabcWorker.js`, format: 'esm' },
