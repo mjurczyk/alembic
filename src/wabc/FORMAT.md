@@ -10,7 +10,7 @@ This document defines `.wabc`, an optimised copy of the scene of one `.abc` file
 3. [Header](#3-header)
 4. [Chunks](#4-chunks)
 5. [Value encoding](#5-value-encoding)
-6. [Animated samples](#6-animated-samples)
+6. [Samples rebuilt by the loader](#6-samples-rebuilt-by-the-loader)
 7. [Chunk order](#7-chunk-order)
 8. [Conversion from `.abc`](#8-conversion-from-abc)
 9. [Versions and extensions](#9-versions-and-extensions)
@@ -38,7 +38,7 @@ This document defines `.wabc`, an optimised copy of the scene of one `.abc` file
 Each subsection ends with a **Check** line:
 
 - **[ABC] x.y**: a fact of the `.abc` format or of the demo files, from the research document.
-- **demo**: measured on all 250 frames of `demo.abc` and `demo-nonparticle.abc`. The measurement scripts are research scripts, not in the repository. A prototype writer and a prototype reader, made from this document only, converted both files and read every chunk back (section 11). Where a number is from some frames only, the Check line names the frames.
+- **demo**: measured on all 250 frames of `demo.abc` and `demo-nonparticle.abc`, and of `demo-smooth.abc` (1 113 189 646 bytes: one PolyMesh on the same grid as the other two files, without `N`). The measurement scripts are research scripts, not in the repository. The CLI (`src/wabc`) converted the 3 files. The decoders `src/wabc/rehydrate.js` and `src/wabc/points.js` read the files back (section 11). Where a number is from some frames only, the Check line names the frames.
 - **local**: measured on test files made with libAlembic 1.8.12. `test-anim.abc`: animated and static meshes and points, with and without `N`, uniform, cyclic and acyclic time samplings, animated and sheared Xforms. `flag.abc`: Appendix A.
 - **/wabc rule**: a decision of this project. The Check line gives the measured reason.
 
@@ -48,34 +48,37 @@ Each subsection ends with a **Check** line:
 
 The sample values of `demo-nonparticle.abc` are 2 305 664 067 of its 2 305 723 951 bytes ([ABC] 7.1). By property, before shared blocks are removed:
 
-| Property ([ABC] 3.2)  | Bytes, 250 frames | Share | In `.wabc`                                                         |
-| --------------------- | ----------------- | ----- | ------------------------------------------------------------------ |
-| `N` (`fvr`, `f32[3]`) | 1 297 844 496     | 56 %  | One normal for each vertex, 16-bit or 8-bit (5.1)                  |
-| `.faceIndices`        | 432 614 832       | 19 %  | Not stored: one vertex for each face corner, no index buffer (8.4) |
-| `P`                   | 216 231 528       | 9 %   | One position for each vertex, 16-bit (5.1)                         |
-| `Pref`                | 216 231 528       | 9 %   | Not stored (8.6)                                                   |
-| `.faceCounts`         | 144 204 944       | 6 %   | Not stored: all faces have 3 corners (8.4)                         |
-| `.selfBnds`           | 12 000            | 0 %   | Not stored: the `position` range is the bounds (3.9)               |
+| Property ([ABC] 3.2)  | Bytes, 250 frames | Share | In `.wabc`                                                        |
+| --------------------- | ----------------- | ----- | ----------------------------------------------------------------- |
+| `N` (`fvr`, `f32[3]`) | 1 297 844 496     | 56 %  | Not stored: the loader calculates the flat normals (8.4)          |
+| `.faceIndices`        | 432 614 832       | 19 %  | Not stored: the loader makes the triangles from the grid (6.5)    |
+| `P`                   | 216 231 528       | 9 %   | The sign of each grid node, and 3 bits on each crossed edge (6.5) |
+| `Pref`                | 216 231 528       | 9 %   | Not stored (8.6)                                                  |
+| `.faceCounts`         | 144 204 944       | 6 %   | Not stored: all faces have 3 corners (8.4)                        |
+| `.selfBnds`           | 12 000            | 0 %   | Not stored: the `position` range is the bounds (3.9)              |
 
 The optimisations, and the step of an `.abc` reader that each one removes:
 
-| `.abc` ([ABC])                                                                                           | `.wabc`                                                                                          | Section  |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------- |
-| Ogawa groups, object headers and property headers are walked to find the data (1, 2).                    | One JSON header gives all objects, and the position and length of each chunk.                    | 2, 3     |
-| Objects are a tree of compounds (2.5).                                                                   | One flat list of nodes. Each node has the index of its parent.                                   | 3.4      |
-| An Xform stores ops and channel values. `.inherits` can change for each sample (3.4).                    | One evaluated matrix for each sample: world, or local with `.inherits` applied.                  | 3.5, 8.2 |
-| Faces can have any number of corners (3.2).                                                              | Triangles.                                                                                       | 8.4      |
-| `N` and `uv` have a scope and can have indices (3.3).                                                    | One value of each attribute for each vertex.                                                     | 8.4      |
-| `P`, `N` and `uv` are separate `f32` arrays (3.2, 3.3).                                                  | One interleaved vertex buffer, with 16-bit or 8-bit values relative to the bounds.               | 4.3, 5   |
-| A homogeneous mesh stores all `P` (and `N`) values again for each sample (3.2).                          | One base geometry, and for each sample only position deltas (and normals), in one texture layer. | 6        |
-| A heterogeneous mesh, and points whose count changes, store full samples (3.2, 3.5).                     | One full geometry for each sample.                                                               | 3.7      |
-| Uniform, cyclic and acyclic time samplings (4.1).                                                        | Uniform and acyclic time samplings.                                                              | 3.3, 8.3 |
-| The samples of a property can be anywhere in the file, and blocks are shared (1.5).                      | The sample chunks are in time order. A reader can show frame 0 from the first bytes.             | 7        |
-| A data block is a size and raw bytes (1.4). The sample bytes are the array values, not compressed (7.1). | Each chunk is compressed alone, with deflate or brotli.                                          | 4.1      |
+| `.abc` ([ABC])                                                                                           | `.wabc`                                                                                                                           | Section  |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Ogawa groups, object headers and property headers are walked to find the data (1, 2).                    | One JSON header gives all objects, and the position and length of each chunk.                                                     | 2, 3     |
+| Objects are a tree of compounds (2.5).                                                                   | One flat list of nodes. Each node has the index of its parent.                                                                    | 3.4      |
+| An Xform stores ops and channel values. `.inherits` can change for each sample (3.4).                    | One evaluated matrix for each sample: world, or local with `.inherits` applied.                                                   | 3.5, 8.2 |
+| Faces can have any number of corners (3.2).                                                              | Triangles.                                                                                                                        | 8.4      |
+| `N` and `uv` have a scope and can have indices (3.3).                                                    | One value of each attribute for each vertex.                                                                                      | 8.4      |
+| `P`, `N` and `uv` are separate `f32` arrays (3.2, 3.3).                                                  | One interleaved vertex buffer, with 16-bit or 8-bit values relative to the bounds.                                                | 4.3, 5   |
+| A homogeneous mesh stores all `P` (and `N`) values again for each sample (3.2).                          | One base geometry, and for each sample only position deltas (and normals), in one texture layer.                                  | 6        |
+| A heterogeneous mesh, and points whose count changes, store full samples (3.2, 3.5).                     | One full geometry for each sample.                                                                                                | 3.7      |
+| `N` is stored for each face corner (3.2, 3.3).                                                           | Flat and smooth normals are not stored. The loader calculates them.                                                               | 8.4      |
+| A mesh made from a grid (all demo meshes) stores all points and faces again for each sample (3.2).       | The inside or outside of each grid node, and the position on each crossed grid edge. The loader makes the vertices and triangles. | 6.5      |
+| Points store a position and an id for each point (3.5).                                                  | A set of positions on a grid of the point width / 32, without order and ids.                                                      | 6.6      |
+| Uniform, cyclic and acyclic time samplings (4.1).                                                        | Uniform and acyclic time samplings.                                                                                               | 3.3, 8.3 |
+| The samples of a property can be anywhere in the file, and blocks are shared (1.5).                      | The sample chunks are in time order. A reader can show frame 0 from the first bytes.                                              | 7        |
+| A data block is a size and raw bytes (1.4). The sample bytes are the array values, not compressed (7.1). | Each chunk is compressed alone, with deflate or brotli.                                                                           | 4.1      |
 
 The header identifies the source `.abc` file with the SHA-256 digest of all its bytes.
 
-Result: `demo.abc` (2 506 108 821 bytes) becomes 599 125 526 bytes with 16-bit normals, and 477 090 340 bytes with 8-bit normals (section 11).
+Result (section 11): `demo-nonparticle.abc` (2 305 723 951 bytes) becomes 7 738 098 bytes (0.34 %). `demo-smooth.abc` (1 113 189 646 bytes) becomes 8 726 323 bytes (0.78 %). `demo.abc` (2 506 108 821 bytes) becomes 18 252 661 bytes (0.73 %), with the particles.
 
 **Check**: [ABC] 7.1 (sample value bytes); demo (array sizes of all 250 samples of each property, the same in both files; their sum is 2 307 139 328 bytes, 1 475 261 bytes more than the sample values on disk, because of shared blocks; section 11).
 
@@ -93,7 +96,7 @@ Result: `demo.abc` (2 506 108 821 bytes) becomes 599 125 526 bytes with 16-bit n
 
 `dataStart = 12 + headerLength`. Each chunk offset in the header is relative to `dataStart`.
 
-**Check**: /wabc rule (the header gives the byte range of each chunk, so a reader reads only the chunks that it needs; the JSON header of the converted `demo.abc` is 134 564 bytes, 0.02 % of the file, section 11); demo and local (prototype reader).
+**Check**: /wabc rule (the header gives the byte range of each chunk, so a reader reads only the chunks that it needs; the JSON header of the converted `demo-nonparticle.abc` is 27 005 bytes, 0.35 % of the file, section 11); demo and local (decoders of 0.2).
 
 ---
 
@@ -164,27 +167,33 @@ The geometry of a node is in the space of the node: a point `p` is at `p × worl
 
 ### 3.6 Geometry track
 
-| Member         | Type               | Required               | Description                                                                                                                |
-| -------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `mode`         | string             | yes                    | `"static"`, `"vertex"` or `"swap"` (3.7).                                                                                  |
-| `numSamples`   | integer            | yes                    | 1 for `"static"`. 1 or more for the other modes.                                                                           |
-| `timeSampling` | integer            | `"vertex"`, `"swap"`   | Index in `timeSamplings`.                                                                                                  |
-| `layout`       | object             | yes                    | Vertex layout of all geometries of the track (3.8).                                                                        |
-| `base`         | geometry reference | `"static"`, `"vertex"` | The geometry (`"static"`), or the base geometry (`"vertex"`, section 6).                                                   |
-| `animation`    | object             | `"vertex"`             | Layer layout (3.10).                                                                                                       |
-| `samples`      | array              | `"vertex"`, `"swap"`   | One item for each sample, in sample order: layer references (3.10) for `"vertex"`, geometry references (3.9) for `"swap"`. |
+| Member                             | Type               | Required                         | Description                                                                                                                                                                            |
+| ---------------------------------- | ------------------ | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                             | string             | yes                              | `"static"`, `"vertex"`, `"swap"`, `"surface"` or `"set"` (3.7).                                                                                                                        |
+| `numSamples`                       | integer            | yes                              | 1 for `"static"`. 1 or more for the other modes.                                                                                                                                       |
+| `timeSampling`                     | integer            | all modes except `"static"`      | Index in `timeSamplings`.                                                                                                                                                              |
+| `normals`                          | string             | no                               | Mesh only. `"flat"` or `"smooth"`: the normals are not stored, the loader calculates them (6.7). If absent, the layout has the `normal` attribute.                                     |
+| `positions`                        | string             | no                               | `"delta"`: the `n16` position codes are differences from the vertex before (5.4). If absent, they are codes (5.2).                                                                     |
+| `layout`                           | object             | `"static"`, `"vertex"`, `"swap"` | Vertex layout of all geometries of the track (3.8).                                                                                                                                    |
+| `base`                             | geometry reference | `"static"`, `"vertex"`           | The geometry (`"static"`), or the base geometry (`"vertex"`, section 6).                                                                                                               |
+| `animation`                        | object             | `"vertex"`                       | Layer layout (3.10).                                                                                                                                                                   |
+| `grid`, `volume`, `tBits`, `table` |                    | `"surface"`                      | The grid surface (3.11).                                                                                                                                                               |
+| `width`, `step`                    | `f32`              | `"set"`                          | The point set (3.12).                                                                                                                                                                  |
+| `samples`                          | array              | all modes except `"static"`      | One item for each sample, in sample order: layer references (3.10) for `"vertex"`, geometry references (3.9) for `"swap"`, sample references (3.11, 3.12) for `"surface"` and `"set"`. |
 
-**Check**: demo and local (prototype writer and reader).
+**Check**: demo and local (CLI and decoders of 0.2).
 
 ### 3.7 Geometry modes
 
-| Mode       | From `.abc`                                                                                                  | Data                                                                                                     |
-| ---------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `"static"` | A PolyMesh or Points schema that does not change.                                                            | One geometry.                                                                                            |
-| `"vertex"` | A homogeneous PolyMesh ([ABC] 3.2), or Points with the same count and `.pointIds` in all samples (8.4, 8.5). | One base geometry, and one layer for each sample with position deltas, and MAY have normals (section 6). |
-| `"swap"`   | A heterogeneous PolyMesh, or Points whose count or ids change.                                               | One full geometry for each sample. The vertex and index counts can change in each sample.                |
+| Mode        | From `.abc`                                                                                                  | Data                                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `"static"`  | A PolyMesh or Points schema that does not change.                                                            | One geometry.                                                                                                                         |
+| `"vertex"`  | A homogeneous PolyMesh ([ABC] 3.2), or Points with the same count and `.pointIds` in all samples (8.4, 8.5). | One base geometry, and one layer for each sample with position deltas, and MAY have normals (section 6).                              |
+| `"swap"`    | A heterogeneous PolyMesh, or Points whose count or ids change.                                               | One full geometry for each sample. The vertex and index counts can change in each sample.                                             |
+| `"surface"` | A PolyMesh made from a grid: each point is on a grid edge, each triangle is in one grid cell (8.4).          | For each sample, the sign of each grid node and the position on each crossed edge (6.5). The loader makes the vertices and triangles. |
+| `"set"`     | Points that all have one width, in all samples (8.5).                                                        | For each sample, a set of positions on a grid of `step` (6.6). The point order is not kept.                                           |
 
-A reader MAY blend two samples of a `"vertex"` track (6.4). A reader MUST NOT blend two samples of a `"swap"` track: their vertices do not match.
+A reader MAY blend two samples of a `"vertex"` track (6.4). A reader MUST NOT blend two samples of a `"swap"`, `"surface"` or `"set"` track: their vertices do not match.
 
 **Check**: [ABC] 3.2 (the topology of the demo mesh changes on each frame), 3.5 (the point count changes); demo (`demo.abc`, `Cube_241`: 1 715 of 18 017 986 points of a frame have the position of a point of the frame before it, so the frames share no data; `Liquid`: `.pointIds` is `0 … n − 1` in each frame, and from frame to frame the point with the same id moves 4 % of the box diagonal (median) and up to 25 %; deltas by id would be 51 906 937 bytes against 53 417 923 bytes of full samples, 2.8 % less; thus both demo objects are `"swap"`); local (`test-anim.abc`, `n16`, deflate: the `"vertex"` meshes are 36 % to 61 % of the bytes of the same meshes as `"swap"`; the `"vertex"` points track is 99.7 %; with `f32`, 41 % to 72 %, and 75 % for the points).
 
@@ -204,7 +213,7 @@ A reader MAY blend two samples of a `"vertex"` track (6.4). A reader MUST NOT bl
 | `uv`       | mesh         | `uv` (3.3)                     | `f32x2`, `n16x2`         |
 | `width`    | points       | `.widths` (3.5)                | `f32`, `n16x2`           |
 
-A mesh MUST have `position` and `normal`. Points MUST have `position`. A writer MAY add attributes whose name starts with `_`. A reader MAY ignore them.
+A mesh MUST have `position`, and `normal` if its track has no `normals` member (3.6). Points MUST have `position`. A writer MAY add attributes whose name starts with `_`. A reader MAY ignore them.
 
 **Check**: /wabc rule (each attribute starts at a multiple of 4 bytes and has a size that is a multiple of 4, so that the vertex buffer is GPU-ready without a copy; demo, `demo.abc`: this costs 3.6 %, 542 867 712 bytes of mesh chunks with `n16x4` against 524 178 134 bytes with 3 components; the `Liquid` widths are 0.05 in all points of all frames, and the `width` attribute (all codes 0, 5.2) changes the size of the points chunks by −1.1 %, 52 846 464 against 53 419 581 bytes, so a constant width needs no other form).
 
@@ -239,6 +248,31 @@ A layer reference is a chunk reference (3.1). With the `"n16x4"` format it also 
 
 **Check**: local (`test-anim.abc`: prototype writer and reader, all `"vertex"` tracks, both formats).
 
+### 3.11 Surface track
+
+| Member    | Type    | Description                                                                                                                                   |
+| --------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `normals` | string  | `"flat"` or `"smooth"` (6.7). Required.                                                                                                       |
+| `grid`    | object  | `origin` and `spacing`: 3 `f64` each. Grid node `(i, j, k)` is at `origin + (i, j, k) × spacing`, on each axis.                               |
+| `volume`  | object  | `first`: 3 integers, the grid node of volume node `(0, 0, 0)`. `size`: 3 integers, the nodes on each axis. All samples use it.                |
+| `tBits`   | integer | Bits of the position on a crossed edge: 1 to 8 (6.5).                                                                                         |
+| `table`   | object  | Key: a cell case (6.5), as a decimal string. Value: the local edges of its triangles, 3 for each triangle. One key for each case of the file. |
+
+A sample reference is a chunk reference (3.1) with `vertexCount` (the crossed edges of the sample) and `triangleCount` (the triangles of the source sample). Volume node `(x, y, z)` has the index `x + y × size[0] + z × size[0] × size[1]`.
+
+**Check**: demo (`demo-nonparticle.abc`: volume 240 × 145 × 264 nodes, spacing 0.010824968 on each axis, 252 cell cases; `demo-smooth.abc`: 233 × 145 × 264 nodes, the same spacing, 252 cell cases).
+
+### 3.12 Set track
+
+| Member  | Type  | Description                                              |
+| ------- | ----- | -------------------------------------------------------- |
+| `width` | `f32` | The width of all points of all samples. Required.        |
+| `step`  | `f32` | The size of a cell of the position grid (6.6). Required. |
+
+A sample reference is a chunk reference (3.1) with `vertexCount` (the points of the sample) and `origin` (3 `f32`: the corner of the position grid of the sample).
+
+**Check**: demo (`demo.abc`, `Liquid`: width 0.05 in all points of all frames, step 0.0015625).
+
 ---
 
 ## 4. Chunks
@@ -250,9 +284,9 @@ Each chunk is compressed alone:
 - `"deflate"`: one zlib stream (RFC 1950) with the deflate method (RFC 1951).
 - `"brotli"`: one brotli stream (RFC 7932).
 
-Sections 4.2 to 4.4 describe the bytes after decompression. Appendix B gives the size of each chunk after decompression.
+Sections 4.2 to 4.6 describe the bytes after decompression. Appendix B gives the size of each chunk after decompression.
 
-**Check**: demo (the chunks of frames 124 and 249 of `demo.abc`: brotli quality 11 is 19 % to 25 % smaller than deflate level 6, and zstd level 19 is 6 % to 11 % smaller; brotli takes 54 to 113 times as long as deflate to compress, and 1 to 3 times as long to decompress; deflate level 9 is within 0.05 % of level 6 on frames 49, 99, 149, 199 and 249); local (`test-anim.abc`: brotli is 17 % smaller than deflate).
+**Check**: demo (the chunks of frames 124 and 249 of `demo.abc`: brotli quality 11 is 19 % to 25 % smaller than deflate level 6, and zstd level 19 is 6 % to 11 % smaller; brotli takes 54 to 113 times as long as deflate to compress, and 1 to 3 times as long to decompress; deflate level 9 is within 0.05 % of level 6 on frames 49, 99, 149, 199 and 249); local (`test-anim.abc`: brotli is 17 % smaller than deflate). The surface and set chunks (4.5, 4.6) are arithmetic-coded already: deflate makes them 0.06 % larger in `demo-nonparticle.abc` and `demo-smooth.abc`, 1.5 % larger for `swarm` in `test-anim.abc`, and 62 % larger for the 3 samples of 2 to 4 points in `flag.abc`.
 
 ### 4.2 Matrix chunk
 
@@ -276,6 +310,36 @@ The index buffer starts at a multiple of 4 bytes, because `stride` is a multiple
 `width × height` texels. Texel `t` is in column `t % width` and row `floor(t / width)`, at byte `t × texelSize`. `texelSize` is 8 for `"n16x4"` (4 `i16`) and 16 for `"f32x4"` (4 `f32`). Section 6 gives the content of each texel.
 
 **Check**: local (`test-anim.abc`).
+
+### 4.5 Surface sample chunk
+
+One arithmetic-coded stream (5.5), with new models for each chunk. It needs the signs of the sample before it; sample 0 uses all signs 0. A sign is 1 inside and 0 outside.
+
+1. **Signs.** The volume is cut into blocks of 8 × 8 × 8 nodes (smaller at the high ends). The blocks are in index order of their first node (x changes fastest, then y, then z). For each block: a flag with the model `blocks[last]`, `last` being the flag of the block before (1 for the first block). Flag 1: each node of the block has the sign of the sample before. Flag 0: each node of the block, in node index order, is one bit with the model `nodes[c]`:
+
+```
+c = s(x − 1, y, z) | s(x, y − 1, z) << 1 | s(x, y, z − 1) << 2
+  | p(x, y, z) << 3 | p(x + 1, y, z) << 4 | p(x, y + 1, z) << 5 | p(x, y, z + 1) << 6
+```
+
+`s` is the sign in this sample, `p` the sign in the sample before. A node outside the volume has the sign 0.
+
+2. **Edge positions.** The crossed edges are the edges `(node, axis)` from a node to the next node on `axis` (axis 0, 1, 2 in this order), in node index order, where the 2 nodes have different signs. For each crossed edge: a code of `tBits` bits, with the bit tree `t` (5.5).
+
+Models: `blocks` 2, `nodes` 128, `t` 2^(tBits + 1), all with the start value of 5.5.
+
+**Check**: demo (all 250 frames of the 2 surface tracks decode in order, and each sample gives `vertexCount` crossed edges).
+
+### 4.6 Set sample chunk
+
+One arithmetic-coded stream (5.5), with new models for each chunk. For each of the `vertexCount` points, a gap `g` (0 or more) is coded as `v = g + 1`:
+
+1. the bit length `n` of `v` in unary: bit 1 with the model `lengths[i]` for `i = 1 … n − 1`, then bit 0 with `lengths[n]`;
+2. the `n − 1` bits of `v` after its top bit, from the highest: bit `j` (0 for the first) with the model `bits[n × 9 + min(j, 8)]`.
+
+Models: `lengths` 65, `bits` 64 × 9, with the start value of 5.5. The key of point `i` is the sum of the gaps of points 0 to `i` (6.6).
+
+**Check**: demo (`demo.abc`, `Liquid`: all frames decode; frames 0, 25, …, 225, 249 give the same set of cells as the source, 0 points missing).
 
 ---
 
@@ -325,9 +389,40 @@ x = center + max(code / m, −1) × extent
 
 **Check**: demo and local (prototype reader).
 
+### 5.4 Delta positions
+
+With `positions` `"delta"` (3.6), the 3 `n16` position values of vertex `v` are `d(v) = code(v) − code(v − 1)`, with `code(−1) = 0`, kept to 16 bits (two's complement wrap). The loader gets `code(v) = code(v − 1) + d(v)`, kept to 16 bits, then decodes it (5.3). The writer SHOULD put the vertices in the order of a Morton curve over the box of the sample (8.5).
+
+**Check**: local (`test-anim.abc`, `spray`: 14 368 bytes; `test-render.abc`, `points`); demo (`demo.abc`, `Liquid` with this form and not 6.6: 45 651 651 bytes, against 52 846 464 bytes with codes, −13.6 %).
+
+### 5.5 Arithmetic coding
+
+A binary arithmetic coder with a 32-bit range. A model is a `u16` `p`: the chance of bit 1, × 65536. Each model starts at 32768.
+
+Encoder: `low = 0`, `high = 2^32 − 1`. To code `bit` with model `p`:
+
+```
+middle = low + floor((high − low) × p / 65536)
+bit = 1: high = middle        bit = 0: low = middle + 1
+p = bit ? p + ((65536 − p) >> 5) : p − (p >> 5), then clamp(p, 32, 65504)
+while the top bytes of low and high are equal:
+  output the top byte of high
+  low = (low << 8) mod 2^32,  high = ((high << 8) | 255) mod 2^32
+```
+
+At the end, the encoder outputs the 4 bytes of `low`, top byte first.
+
+Decoder: `value` is the first 4 bytes, top byte first. A byte after the end of the stream is 0. To decode with model `p`: the same `middle`, `bit = value ≤ middle ? 1 : 0`, the same changes of `low`, `high` and `p`, and in the loop also `value = ((value << 8) | next byte) mod 2^32`.
+
+The product `(high − low) × p` is less than 2^48, so it is exact in `f64`.
+
+A bit tree of `n` bits with the models `m`: `node = 1`; for each bit from the highest, code it with `m[node]`, then `node = 2 × node + bit`. The value is `node − 2^n`.
+
+**Check**: demo and local (the decoders of 0.2 give the same signs, edge codes and point cells as the writer, in all decoded samples).
+
 ---
 
-## 6. Animated samples
+## 6. Samples rebuilt by the loader
 
 ### 6.1 Texels
 
@@ -381,6 +476,36 @@ normal   = normalize(normal(i, v) + (normal(j, v) − normal(i, v)) × alpha)
 
 **Check**: [ABC] 4.2 (floor and ceil samples, `alpha`).
 
+### 6.5 Grid surfaces
+
+The loader makes the mesh of a `"surface"` sample from its signs and edge codes (4.5).
+
+- **Vertices.** Vertex `i` is crossed edge `i`. On the edge axis, its grid coordinate is the node coordinate plus `(code + 0.5) / 2^tBits`. Its position is `origin + (first + local) × spacing` on each axis (3.11).
+- **Cells.** Cell `c` has its lowest node at volume node `c`, and corner `k` at `c + (k & 1, k >> 1 & 1, k >> 2 & 1)`. Its case is the number with bit `k` equal to the sign of corner `k`.
+- **Local edges.** Edge `4a + u + 2v` of a cell is on axis `a`, at offset `u` and `v` on the 2 other axes, in increasing axis order: x edges are 0 to 3, y edges 4 to 7, z edges 8 to 11.
+- **Triangles.** Each cell with a crossed edge gives the triangles of `table[case]`. Each local edge gives the vertex of that crossed edge. A cell case that is not in `table` makes the file invalid.
+
+The triangles keep the clockwise order of the source faces (8.4). The loader MAY put the triangles in any order.
+
+A vertex is at most `spacing / 2^(tBits + 1)` from its source point on the edge axis, and at most `spacing / 1000` on each other axis: the writer puts coordinates closer than that onto the grid planes (8.4). A source point on a node can also be `spacing / 1000` off on the edge axis.
+
+**Check**: demo (`demo-nonparticle.abc`, `tBits` 3, spacing 10.82 mm, bound 0.6766 mm: frames 125 and 249: points on an edge at most 0.6766 mm on the edge axis, points on a node at most 0.6861 mm, at most 0.0107 mm on the other axes; frames 0, 25, …, 225, 249 of `demo-nonparticle.abc` and `demo-smooth.abc`: 99.946 % and 99.944 % of the source triangles are rebuilt with the same points; the other triangles are in cells around source points on a node (8.4)).
+
+### 6.6 Point sets
+
+The key of a point is its cell `(i, j, k)` on the grid of `step` from `origin` (3.12), with bit `b` of `i`, `j`, `k` at bit `3b`, `3b + 1`, `3b + 2` of the key (`b` < 17). The keys of a sample increase. The position of the point is `origin + (cell + 0.5) × step` on each axis, and its width is `width`.
+
+On each axis, a point is at most `step / 2` from the source point.
+
+**Check**: demo (`demo.abc`, `Liquid`: at most 0.78 mm on each axis, step 1.5625 mm; 10.08 bits for each point on frames 0, 10, …, 240).
+
+### 6.7 Normals made by the loader
+
+- `"flat"`: each triangle `(a, b, c)` has the normal `normalize((c − a) × (b − a))` at its 3 corners.
+- `"smooth"`: each vertex has the normalized sum of `(c − a) × (b − a)` of all triangles that use it (8.4).
+
+**Check**: [ABC] 3.2 (the faces are clockwise when seen from the side of `N`); demo (8.4).
+
 ---
 
 ## 7. Chunk order
@@ -396,6 +521,7 @@ Thus:
 - Parts 1 and 2 are first. They contain all matrices and all data that does not change over time.
 - The sample chunks of one time (one frame) are one contiguous byte range.
 - A reader can show time `t` when it has the bytes up to the end of the last sample chunk with a time not more than `t`. To blend to the next sample, it also needs the next frame.
+- A `"surface"` sample needs the signs of the sample before it (4.5). Thus a reader decodes the samples of a surface track in order, from sample 0.
 
 **Check**: demo (prototype reader: offsets are contiguous, the parts are in order, the times do not decrease; the first frame of the converted `demo.abc` is in its first 173 574 bytes, section 11); local.
 
@@ -442,21 +568,41 @@ For each sample:
 4. **Normals.** If the sample has no `N`, the writer calculates the normal of each vertex: the normalized sum of `(c − a) × (b − a)` over all triangles `(a, b, c)` that use the vertex.
 5. **uv.** `uv` is stored without change.
 
-Mode:
+Normals of the track:
+
+- `"flat"`: all corners of a face have the same `N`, within 1° of the face normal `(c − a) × (b − a)` (Newell sum for more corners), for at least 99.9 % of all faces of the track.
+- `"smooth"`: the mesh has no `N`, or `N` of each corner is within 1° of the normalized sum of the face normals at its point, for at least 99.9 % of all corners of the track.
+- Else the normals are stored (`normal` attribute, no `normals` member).
+
+Mode, the first that fits:
 
 - `"static"`: the schema and its `N` and `uv` do not change.
+- `"surface"`: the normals are `"flat"` or `"smooth"`, the mesh has no `uv`, all faces have 3 corners, and there is one grid (`spacing`, `origin`) for all samples where:
+
+  - each point has at least 2 coordinates on grid planes (closer than `spacing / 1000`), so it is on a grid edge or a grid node;
+  - the signs of the nodes follow from the points: nodes joined by edges without a point have one sign, an edge with a point has 2 signs, the volume margin is outside;
+  - each edge with a sign change has one point on it or on one of its nodes, and each point on an edge is on an edge with a sign change;
+  - each triangle whose points are on edges is in one cell, and all cells with the same case have the same triangles in all samples;
+  - each case of a cell around a point on a node is in the table of the other cells.
+
+  The table and the edge codes come from these points: `code = min(floor(t × 2^tBits), 2^tBits − 1)`, with `t` the position of the point on its edge (0 or 1 for a point on a node).
+
 - `"vertex"`: the point count, `.faceIndices`, `.faceCounts`, the `uv` values and indices, and the `N` indices are the same in all samples. Only `P` and `N` values change.
 - `"swap"`: all other cases.
 
-**Check**: [ABC] 3.2 (all demo faces have 3 corners, `N` is `fvr` and not indexed, the faces are clockwise from the side of `N`, and `N` is opposite on 3 faces), 3.3; demo (all 36 051 236 faces have the same `N` at their 3 corners, and only 2 points have one `N`; thus 108 153 222 of 108 153 708 face corners are separate vertices; with merged vertices and an index buffer the mesh chunks are 822 554 437 bytes, without an index buffer 542 867 712 bytes, 34 % less; in frame 249, `N` is up to 9.5° from the normal of its face, so `N` is stored and not calculated); local (`test-anim.abc`: in all meshes without `N` (`blob`, `box`, `sheared_box`, `disc`, `grow`), each triangle with a non-zero area has its calculated normals on the side of `(c − a) × (b − a)`; `twist` has an `N` that is opposite to that side on all its faces in the file, and it is stored without change; `flag.abc`: the indexed face-varying `uv` gives 6 vertices for 8 face corners).
+**Check**: [ABC] 3.2 (all demo faces have 3 corners, `N` is `fvr` and not indexed, the faces are clockwise from the side of `N`, and `N` is opposite on 3 faces), 3.3; demo (all 36 051 236 faces have the same `N` at their 3 corners, and only 2 points have one `N`; thus 108 153 222 of 108 153 708 face corners are separate vertices; with merged vertices and an index buffer the mesh chunks are 822 554 437 bytes, without an index buffer 542 867 712 bytes, 34 % less; in frame 249, `N` is up to 9.5° from the normal of its face, so `N` is stored and not calculated); local (`test-anim.abc`: in all meshes without `N` (`blob`, `box`, `sheared_box`, `disc`, `grow`), each triangle with a non-zero area has its calculated normals on the side of `(c − a) × (b − a)`; `twist` has an `N` that is opposite to that side on all its faces in the file, and it is stored without change; `flag.abc`: the indexed face-varying `uv` gives 6 vertices for 8 face corners). Normals: demo (`demo-nonparticle.abc`: 4 817 of 36 051 236 faces are more than 1° off, 0.013 %, so `"flat"`; frame 0 alone is over 0.1 %; `demo-smooth.abc` has no `N`: `"smooth"`; `demo.abc` with the mesh in `"swap"` and `"flat"` normals: 226 133 470 bytes, against 546 144 486 bytes with stored normals); local (stored: analytic `N` of a low sphere, a constant `N` and the `twist` `N`; `"flat"`: cubes, n-gons; `"smooth"`: meshes without `N`). Surface: demo (all points of all frames of `demo-nonparticle.abc` and `demo-smooth.abc` are within `spacing / 1000` of 2 planes; 99.84 % to 99.94 % of the triangles of frames 124, 125, 200, 201, 248 and 249 are in one cell; `demo-nonparticle.abc`: 252 cases, and 205 cases of cells around points on nodes, all in the table; 771 of the 794 090 points of frames 0, 25, …, 225, 249 are on a node, 0.1 %); local (no test mesh is a grid surface: all keep their earlier mode).
 
 ### 8.5 Points
 
 For each sample, vertex `v` is point `v`. `position` is `P`. With `.widths`, `width` is the width of each point (scope `constant`: the same width for all points).
 
-The `"vertex"` mode only if the point count and `.pointIds` are the same in all samples. `"swap"` in all other animated cases.
+The Mode, the first that fits:
 
-**Check**: [ABC] 3.5; demo (3.7); local (`test-anim.abc`: `swarm` is `"vertex"`, `spray` is `"swap"`).
+- `"set"` (animated points): all points of all samples have one width. `step` = width / 32 (a writer option). The position grid of a sample starts at the smallest position of the sample, as `f32` on each axis.
+- `"vertex"`: the point count and `.pointIds` are the same in all samples.
+- `"swap"`: all other animated cases. With `n16` positions the vertices SHOULD be in Morton order with `positions` `"delta"` (5.4).
+
+**Check**: [ABC] 3.5; demo (3.7; `demo.abc`, `Liquid`: `"set"` gives 10 483 170 bytes, against 45 651 651 bytes with delta positions and 52 846 464 bytes with codes; the `.pointIds` are `0 … n − 1`, so the order has no meaning, 3.7); local (`test-anim.abc`: `swarm` is `"set"`, `spray` is `"swap"`).
 
 ### 8.6 Data not stored
 
@@ -490,8 +636,10 @@ Before a reader allocates memory or reads a chunk, it MUST check:
 - `offset + length` of each chunk is not more than the length of the data section
 - the size of each chunk after decompression is equal to Appendix B (stop at that size)
 - each index of an index buffer is less than `vertexCount`
+- a `"surface"` sample gives `vertexCount` crossed edges, and each of its cell cases is in `table`
+- each key of a `"set"` sample is less than 2^51 (cells less than 2^17 on each axis)
 
-A reader SHOULD set limits for `vertexCount`, `indexCount`, `numSamples` and `width × height`.
+A reader SHOULD set limits for `vertexCount`, `indexCount`, `numSamples`, `width × height`, the volume node count of a surface track, and the decompressed size of a surface or set chunk (Appendix B).
 
 **Check**: demo and local (the prototype reader does all these checks on all chunks).
 
@@ -499,42 +647,23 @@ A reader SHOULD set limits for `vertexCount`, `indexCount`, `numSamples` and `wi
 
 ## 11. Byte accounting
 
-The prototype writer converted both demo files: `"world"` space, deflate level 6, `n16x4` positions, and `n16x4` or `n8x4` normals. The prototype reader read every chunk back with the checks of section 10: offsets contiguous, chunk order of section 7, sizes of Appendix B. All bytes are in exactly one range: the first 12 bytes, the header, or one chunk.
+The CLI converted the 3 demo files with its default options: `"world"` space, deflate, `n16` formats, `tBits` 3, point precision 32. The decoders of 0.2 read every chunk back with the checks of section 10. All bytes are in exactly one range: the first 12 bytes, the header, or one chunk.
 
-### 11.1 `demo.abc` (2 506 108 821 bytes)
+| Range                          | `demo.abc` (2 506 108 821 bytes) | `demo-nonparticle.abc` (2 305 723 951 bytes) | `demo-smooth.abc` (1 113 189 646 bytes) |
+| ------------------------------ | -------------------------------- | -------------------------------------------- | --------------------------------------- |
+| First 12 bytes                 | 12                               | 12                                           | 12                                      |
+| Header                         | 58 398                           | 27 005                                       | 27 055                                  |
+| `/Cube/Liquid` (`"set"`)       | 10 483 170                       |                                              |                                         |
+| `/Cube/Cube_241` (`"surface"`) | 7 711 081                        | 7 711 081                                    | 8 699 256                               |
+| **Total**                      | **18 252 661**                   | **7 738 098**                                | **8 726 323**                           |
+| Share of the `.abc` file       | 0.73 %                           | 0.34 %                                       | 0.78 %                                  |
+| Bytes to show frame 0          | 59 356                           | 27 579                                       | 27 631                                  |
+| Mean frame                     | 72 777                           | 30 844                                       | 34 797                                  |
+| Largest frame                  | 154 936                          | 63 406                                       | 54 915                                  |
 
-| Range                                       | Chunks | `n16x4` normals | `n8x4` normals  | After decompression (`n16x4` / `n8x4`) |
-| ------------------------------------------- | ------ | --------------- | --------------- | -------------------------------------- |
-| First 12 bytes                              |        | 12              | 12              |                                        |
-| Header                                      |        | 134 564         | 134 523         |                                        |
-| Parts 1 and 2 (matrices, static geometries) | 0      | 0               | 0               |                                        |
-| `/Cube/Liquid` (`"swap"`, stride 12)        | 250    | 52 846 464      | 52 846 464      | 100 451 040                            |
-| `/Cube/Cube_241` (`"swap"`, stride 16 / 12) | 250    | 546 144 486     | 424 109 341     | 1 730 459 328 / 1 297 844 496          |
-| **Total**                                   | 500    | **599 125 526** | **477 090 340** |                                        |
-| Share of the `.abc` file                    |        | 23.9 %          | 19.0 %          |                                        |
+No demo file has a matrix track or a static geometry: `/Cube` is a constant identity matrix (3.5), and all geometries change on each frame (3.7). Thus parts 1 and 2 are empty, and the frames follow the header.
 
-| Frames (one sample chunk of each node)                  | `n16x4` normals | `n8x4` normals |
-| ------------------------------------------------------- | --------------- | -------------- |
-| Bytes to show frame 0 (first 12 bytes, header, frame 0) | 173 574         | 163 973        |
-| Mean frame                                              | 2 395 964       | 1 907 823      |
-| Largest frame                                           | 4 463 948       | 3 581 610      |
-
-### 11.2 `demo-nonparticle.abc` (2 305 723 951 bytes)
-
-| Range                       | Chunks | `n16x4` normals | `n8x4` normals  |
-| --------------------------- | ------ | --------------- | --------------- |
-| First 12 bytes              |        | 12              | 12              |
-| Header                      |        | 60 992          | 60 964          |
-| `/Cube/Cube_241` (`"swap"`) | 250    | 546 144 321     | 424 109 428     |
-| **Total**                   | 250    | **546 205 325** | **424 170 404** |
-| Share of the `.abc` file    |        | 23.7 %          | 18.4 %          |
-| Bytes to show frame 0       |        | 98 338          | 88 750          |
-| Mean frame                  |        | 2 184 577       | 1 696 438       |
-| Largest frame               |        | 4 017 317       | 3 134 980       |
-
-Neither demo file has a matrix track or a static geometry: `/Cube` is a constant identity matrix (3.5), and both geometries change on each frame (3.7). Thus parts 1 and 2 are empty, and the frames follow the header.
-
-**Check**: demo (prototype writer and reader, all 250 frames of both files; the totals are equal to the file sizes).
+**Check**: demo (CLI and decoders of 0.2, all 250 frames of the 3 files; the totals are equal to the file sizes).
 
 ---
 
@@ -553,20 +682,20 @@ Neither demo file has a matrix track or a static geometry: `/Cube` is a constant
 | ----------- | -------- | ------- | -------------------------------------------------------------------------------------------- |
 | `/rig`      | Xform    | 3       | Translate op `(0, 0.1 × i, 0)` in sample `i`.                                                |
 | `/rig/flag` | PolyMesh | 3       | 2 quads, 6 points, indexed face-varying `uv`, no `N`. Points 1 and 4 move on z by `0.1 × i`. |
-| `/ground`   | PolyMesh | 1       | 1 quad, 4 points, `.faceIndices` `(0, 3, 2, 1)`.                                             |
-| `/sparks`   | Points   | 3       | 2, 3 and 4 points, `.pointIds` `0 … n − 1`, `.widths` 0.05.                                  |
+| `/ground`   | PolyMesh | 1       | 1 quad, 4 points, `.faceIndices` `(0, 3, 2, 1)`, no `N`.                                     |
+| `/sparks`   | Points   | 3       | 2, 3 and 4 points at `(0.2 × k, 1.5 + 0.1 × i, 0)`, `.pointIds` `0 … n − 1`, `.widths` 0.05. |
 
-The prototype writer converted it with `"world"` space, `n16` formats and deflate: 3 007 bytes.
+The CLI converted it with its default options (`"world"` space, `n16` formats, deflate, point precision 32): 2 359 bytes.
 
 ### A.1 First 12 bytes
 
 ```
 57 41 42 43   magic "WABC"
 01 00 00 00   version 1
-68 0a 00 00   headerLength 2664
+1c 08 00 00   headerLength 2076
 ```
 
-`dataStart = 12 + 2664 = 2676`. The data section has 331 bytes.
+`dataStart = 12 + 2076 = 2088`. The data section has 271 bytes.
 
 ### A.2 Header
 
@@ -614,17 +743,17 @@ The file stores this JSON without spaces and line breaks:
         "mode": "vertex",
         "numSamples": 3,
         "timeSampling": 0,
+        "normals": "smooth",
         "layout": {
-          "stride": 20,
+          "stride": 12,
           "attributes": [
             { "name": "position", "format": "n16x4", "offset": 0 },
-            { "name": "normal", "format": "n16x4", "offset": 8 },
-            { "name": "uv", "format": "n16x2", "offset": 16 }
+            { "name": "uv", "format": "n16x2", "offset": 8 }
           ]
         },
         "base": {
           "offset": 60,
-          "length": 60,
+          "length": 53,
           "vertexCount": 6,
           "indexCount": 12,
           "quantization": {
@@ -635,10 +764,10 @@ The file stores this JSON without spaces and line breaks:
             "uv": { "center": [0.5, 0.5], "extent": [0.5, 0.5] }
           }
         },
-        "animation": { "format": "n16x4", "texelStride": 2, "width": 12, "height": 1 },
+        "animation": { "format": "n16x4", "texelStride": 1, "width": 6, "height": 1 },
         "samples": [
           {
-            "offset": 161,
+            "offset": 143,
             "length": 24,
             "delta": {
               "center": [0, 0, -0.05000000074505806],
@@ -646,13 +775,13 @@ The file stores this JSON without spaces and line breaks:
             }
           },
           {
-            "offset": 201,
-            "length": 40,
+            "offset": 184,
+            "length": 12,
             "delta": { "center": [0, 0, 0], "extent": [0, 0, 0] }
           },
           {
-            "offset": 257,
-            "length": 50,
+            "offset": 219,
+            "length": 24,
             "delta": {
               "center": [0, 0, 0.05000000074505806],
               "extent": [0, 0, 0.05000000074505806]
@@ -669,16 +798,14 @@ The file stores this JSON without spaces and line breaks:
       "geometry": {
         "mode": "static",
         "numSamples": 1,
+        "normals": "smooth",
         "layout": {
-          "stride": 16,
-          "attributes": [
-            { "name": "position", "format": "n16x4", "offset": 0 },
-            { "name": "normal", "format": "n16x4", "offset": 8 }
-          ]
+          "stride": 8,
+          "attributes": [{ "name": "position", "format": "n16x4", "offset": 0 }]
         },
         "base": {
-          "offset": 120,
-          "length": 41,
+          "offset": 113,
+          "length": 30,
           "vertexCount": 4,
           "indexCount": 6,
           "quantization": { "position": { "center": [0, 0, 0], "extent": [2, 0, 2] } }
@@ -691,55 +818,29 @@ The file stores this JSON without spaces and line breaks:
       "parent": -1,
       "type": "points",
       "geometry": {
-        "mode": "swap",
+        "mode": "set",
         "numSamples": 3,
         "timeSampling": 0,
-        "layout": {
-          "stride": 12,
-          "attributes": [
-            { "name": "position", "format": "n16x4", "offset": 0 },
-            { "name": "width", "format": "n16x2", "offset": 8 }
-          ]
-        },
+        "width": 0.05000000074505806,
+        "step": 0.0015625000232830644,
         "samples": [
           {
-            "offset": 185,
-            "length": 16,
+            "offset": 167,
+            "length": 17,
             "vertexCount": 2,
-            "indexCount": 0,
-            "quantization": {
-              "position": {
-                "center": [0.10000000149011612, 1.5, 0],
-                "extent": [0.10000000149011612, 0, 0]
-              },
-              "width": { "center": [0.05000000074505806], "extent": [0] }
-            }
+            "origin": [0, 1.5, 0]
           },
           {
-            "offset": 241,
-            "length": 16,
+            "offset": 196,
+            "length": 23,
             "vertexCount": 3,
-            "indexCount": 0,
-            "quantization": {
-              "position": {
-                "center": [0.20000000298023224, 1.600000023841858, 0],
-                "extent": [0.20000000298023224, 0, 0]
-              },
-              "width": { "center": [0.05000000074505806], "extent": [0] }
-            }
+            "origin": [0, 1.600000023841858, 0]
           },
           {
-            "offset": 307,
-            "length": 24,
+            "offset": 243,
+            "length": 28,
             "vertexCount": 4,
-            "indexCount": 0,
-            "quantization": {
-              "position": {
-                "center": [0.30000001192092896, 1.7000000476837158, 0],
-                "extent": [0.30000001192092896, 0, 0]
-              },
-              "width": { "center": [0.05000000074505806], "extent": [0] }
-            }
+            "origin": [0, 1.7000000476837158, 0]
           }
         ]
       }
@@ -750,10 +851,10 @@ The file stores this JSON without spaces and line breaks:
 
 The conversion (section 8):
 
-- `/rig/flag` is `"vertex"`: its point count, `.faceIndices`, `.faceCounts` and `uv` do not change (8.4). It has no `N`, so the normals are calculated for each sample. They change with `P`, so `texelStride` is 2 (6.3). The indexed `uv` gives 6 vertices for 8 face corners. `base` is the middle of each position value (6.2), so the z of points 1 and 4 in `base` is 0.1, and their z deltas in layers 0, 1 and 2 are −0.1, 0 and 0.1.
+- `/rig/flag` is `"vertex"`: its point count, `.faceIndices`, `.faceCounts` and `uv` do not change (8.4). It has no `N`, so its normals are `"smooth"` and not stored, and `texelStride` is 1 (6.3). The indexed `uv` gives 6 vertices for 8 face corners. `base` is the middle of each position value (6.2): the z of points 1 and 4 in `base` is 0.1, and their z deltas in layers 0, 1 and 2 are −0.1, 0 and 0.1.
 - `/rig/flag` has the matrices of `/rig`, because the space is `"world"` (3.5).
-- `/ground` is `"static"`. Its normals are calculated.
-- `/sparks` is `"swap"`: its point count changes (8.5). All widths are 0.05: the `width` range has `extent` 0, and all codes are 0 (5.2).
+- `/ground` is `"static"`, with `"smooth"` normals: only positions are stored.
+- `/sparks` is `"set"`: all points of all samples have the width 0.05 (8.5), so `step` is 0.05 / 32 = 0.0015625.
 - `.selfBnds`, `.pointIds` and the metadata are not stored (8.6).
 
 ### A.3 Chunks
@@ -762,16 +863,16 @@ The conversion (section 8):
 | ------ | ------ | ------------------------ | ---------------------------- | ----------------- |
 | 0      | 30     | 192                      | `/rig` matrix                | `64 × 3`          |
 | 30     | 30     | 192                      | `/rig/flag` matrix           | `64 × 3`          |
-| 60     | 60     | 144                      | `/rig/flag` base             | `6 × 20 + 12 × 2` |
-| 120    | 41     | 76                       | `/ground` geometry           | `4 × 16 + 6 × 2`  |
-| 161    | 24     | 96                       | `/rig/flag` layer 0 (1/24 s) | `12 × 1 × 8`      |
-| 185    | 16     | 24                       | `/sparks` sample 0 (1/24 s)  | `2 × 12`          |
-| 201    | 40     | 96                       | `/rig/flag` layer 1 (2/24 s) | `12 × 1 × 8`      |
-| 241    | 16     | 36                       | `/sparks` sample 1 (2/24 s)  | `3 × 12`          |
-| 257    | 50     | 96                       | `/rig/flag` layer 2 (3/24 s) | `12 × 1 × 8`      |
-| 307    | 24     | 48                       | `/sparks` sample 2 (3/24 s)  | `4 × 12`          |
+| 60     | 53     | 96                       | `/rig/flag` base geometry    | `6 × 12 + 12 × 2` |
+| 113    | 30     | 44                       | `/ground` geometry           | `4 × 8 + 6 × 2`   |
+| 143    | 24     | 48                       | `/rig/flag` layer 0 (1/24 s) | `6 × 1 × 8`       |
+| 167    | 17     | 9                        | `/sparks` sample 0 (1/24 s)  | no fixed size     |
+| 184    | 12     | 48                       | `/rig/flag` layer 1 (2/24 s) | `6 × 1 × 8`       |
+| 196    | 23     | 14                       | `/sparks` sample 1 (2/24 s)  | no fixed size     |
+| 219    | 24     | 48                       | `/rig/flag` layer 2 (3/24 s) | `6 × 1 × 8`       |
+| 243    | 28     | 19                       | `/sparks` sample 2 (3/24 s)  | no fixed size     |
 
-Parts 1 and 2 (section 7) end at byte 161. Then each frame is one byte range: 1/24 s is bytes 161 to 200, 2/24 s is bytes 201 to 256, and 3/24 s is bytes 257 to 330.
+Parts 1 and 2 of section 7 end at byte 143. Then each frame is one byte range: 1/24 s is bytes 143 to 183, 2/24 s is bytes 184 to 218, and 3/24 s is bytes 219 to 270.
 
 ### A.4 `/rig` matrix, sample 1
 
@@ -785,43 +886,47 @@ Value `4j + k` is Imath `m[j][k]` (0.1), so `m[3]` is `(0, 0.1, 0, 1)`: the tran
 
 ### A.5 `/ground` geometry
 
-The chunk after decompression (76 bytes):
+The chunk after decompression (44 bytes):
 
 ```
-00: 01 80 00 00 01 80 00 00  00 00 ff 7f 00 00 00 00   vertex 0
-10: 01 80 00 00 ff 7f 00 00  00 00 ff 7f 00 00 00 00   vertex 1
-20: ff 7f 00 00 ff 7f 00 00  00 00 ff 7f 00 00 00 00   vertex 2
-30: ff 7f 00 00 01 80 00 00  00 00 ff 7f 00 00 00 00   vertex 3
-40: 00 00 03 00 02 00 00 00  02 00 01 00               indices (u16)
+00: 01 80 00 00 01 80 00 00   vertex 0
+08: 01 80 00 00 ff 7f 00 00   vertex 1
+10: ff 7f 00 00 ff 7f 00 00   vertex 2
+18: ff 7f 00 00 01 80 00 00   vertex 3
+20: 00 00 03 00 02 00 00 00 02 00 01 00   indices (u16)
 ```
 
-Vertex 0 (5.3):
+Vertex 0 (5.3): codes `−32767, 0, −32767`, and 0 in component 3. With the range `center` `[0, 0, 0]`, `extent` `[2, 0, 2]`: `(−2, 0, −2)`.
 
-- `position`, bytes 0 to 7: codes `−32767, 0, −32767`, and 0 in component 3. With `center` `[0, 0, 0]` and `extent` `[2, 0, 2]`: `(−2, 0, −2)`.
-- `normal`, bytes 8 to 15: codes `0, 32767, 0`. With the fixed range: `(0, 1, 0)`.
-
-The indices start at byte `4 × 16 = 64`: the triangles `(0, 3, 2)` and `(0, 2, 1)`. They are the fan of the face `(0, 3, 2, 1)` from corner 0, in the clockwise order of the face (8.4). For `(0, 3, 2)`: `(c − a) × (b − a) = (4, 0, 4) × (4, 0, 0) = (0, 16, 0)`, the side of the calculated normal `(0, 1, 0)`.
+The indices start at byte `4 × 8 = 32`: the triangles `(0, 3, 2)` and `(0, 2, 1)`. They are the fan of the face `(0, 3, 2, 1)` from corner 0, in the clockwise order of the face (8.4). The loader makes the smooth normals (6.7): for `(0, 3, 2)`, `(c − a) × (b − a) = (4, 0, 4) × (4, 0, 0) = (0, 16, 0)`, and `(0, 2, 1)` gives the same direction, so each vertex has the normal `(0, 1, 0)`.
 
 ### A.6 `/rig/flag` vertex 1, sample 2
 
-Vertex 1 in `base` (bytes 20 to 39 of the base chunk):
+Vertex 1 in `base` (bytes 12 to 23 of the base chunk):
 
 ```
 01 80 ff 7f 01 80 00 00   position codes −32767, 32767, −32767   →   (0, 1, 0)
-00 00 00 00 ff 7f 00 00   normal codes 0, 0, 32767               →   (0, 0, 1)
 01 80 ff 7f               uv codes −32767, 32767                 →   (0, 1)
 ```
 
-The `position` range of `base` is `center` `[0.5, 0.5, 0.05]`, `extent` `[0.5, 0.5, 0.05]`. Vertex 1 is point 3 of the mesh, `(0, 1, 0)`, which does not move.
+With the `position` range `center` `[0.5, 0.5, 0.05]`, `extent` `[0.5, 0.5, 0.05]`. Vertex 1 is point 3 of the mesh, `(0, 1, 0)`, which does not move.
 
-Texels 2 and 3 of layer 2 (bytes 16 to 31 of the layer chunk) are vertex 1 (`texelStride` 2):
+Texel 1 of layer 2 (bytes 8 to 15 of the layer chunk, `texelStride` 1):
 
 ```
 00 00 00 00 01 80 00 00   delta codes 0, 0, −32767
-77 d0 00 00 d7 76 00 00   normal codes −12169, 0, 30423
 ```
 
-The `delta` range of layer 2 is `center` `[0, 0, 0.05]`, `extent` `[0, 0, 0.05]`. The delta is `(0, 0, 0.05 − 0.05) = (0, 0, 0)`, so the position is `(0, 1, 0)` (6.2). The normal is `(−12169, 0, 30423) / 32767 = (−0.371, 0, 0.928)`: the normal of the face `(0, 3, 4, 1)` of sample 2, `(−0.2, 0, 0.5)` normalized, because points 1 and 4 are at z = 0.2 (6.3).
+The `delta` range of layer 2 is `center` `[0, 0, 0.05]`, `extent` `[0, 0, 0.05]`. The delta is `(0, 0, 0.05 − 0.05) = (0, 0, 0)`, so the position is `(0, 1, 0)` (6.2). The loader calculates the normals of each sample from its positions (6.7).
+
+### A.7 `/sparks`, sample 0
+
+The source points are `(0, 1.5, 0)` and `(0.2, 1.5, 0)`. The `origin` is their smallest position, `[0, 1.5, 0]`. With `step` 0.0015625, their cells are `(0, 0, 0)` and `(128, 0, 0)` (6.6):
+
+- Point 0: key 0, gap 0, `v` = 1: bit length 1, so one bit 0 with `lengths[1]` (4.6).
+- Point 1: 128 is bit 7 of `i`, so the key is `2^(3 × 7) = 2 097 152`, the gap is 2 097 152, and `v` = 2 097 153: bit length 22, so 21 bits 1 with `lengths[1 … 21]`, a bit 0 with `lengths[22]`, then the 21 bits of `v` after its top bit.
+
+The 9 bytes of the chunk after decompression are `80 00 03 df ff 57 bf b5 00`. The loader decodes them to the cell centres `(0.00078125, 1.50078125, 0.00078125)` and `(0.20078125, 1.50078125, 0.00078125)`: at most 0.00078125 = `step / 2` from the source points on each axis.
 
 The `f32` values in the header, for example `0.05000000074505806`, are exact `f32` values (3.1).
 
@@ -832,3 +937,5 @@ The `f32` values in the header, for example `0.05000000074505806`, are exact `f3
 | Matrix chunk   | `64 × numSamples`                                                   |
 | Geometry chunk | `vertexCount × stride + indexCount × (vertexCount ≤ 65536 ? 2 : 4)` |
 | Layer chunk    | `width × height × (format = "n16x4" ? 8 : 16)`                      |
+| Surface chunk  | no fixed size: an arithmetic-coded stream (4.5)                     |
+| Set chunk      | no fixed size: an arithmetic-coded stream (4.6)                     |
