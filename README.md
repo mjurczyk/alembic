@@ -1,17 +1,26 @@
 # alembic
 
+> [!NOTE]
+> WABC (`.wabc`) is a live proposal. The format can change. See the [WABC format specification](src/wabc/FORMAT.md).
+
+> [!TIP]
+> Convert `.abc` files to `.wabc` before you use them on the web: `npx webabc water.abc` (or `npm install -g webabc`, then `wabc water.abc`). A `.wabc` file is much smaller. `.abc` files also load directly.
+
+> [!WARNING]
+> Experimental: Alembic support for three.js currently only supports TSL and r187. Backwards compatibility coming ASAP.
+
 Alembic (`.abc`) for JavaScript.
 
 | Package         | Folder              | Use                                                          |
 | --------------- | ------------------- | ------------------------------------------------------------ |
-| `alembic`       | `src/alembic`       | Reads `.abc` files. No dependencies. No renderer.            |
+| `alembic-web`   | `src/alembic`       | Reads `.abc` files. No dependencies. No renderer.            |
 | `three-alembic` | `src/three-alembic` | three.js WebGL rendering of `.abc` files.                    |
-| `wabc`          | `src/wabc`          | CLI. Converts `.abc` files into web-optimised `.wabc` files. |
+| `webabc`        | `src/wabc`          | CLI. Converts `.abc` files into web-optimised `.wabc` files. |
 
 ## Usage
 
 ```js
-import * as Alembic from 'alembic';
+import * as Alembic from 'alembic-web';
 
 const reader = await Alembic.loadAlembic('./assets/model.abc');
 
