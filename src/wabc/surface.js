@@ -1,12 +1,12 @@
-import { BitEncoder, createModels } from './arithmetic.js';
+import { WabcCodec } from 'alembic';
+
+const { cornerOffsets, getCellCase, getLocalEdge } = WabcCodec;
 
 // NOTE Meshes extracted from a regular grid (FORMAT.md 6.5). Each vertex is on a grid edge whose 2 nodes have
 // different signs (inside, outside). The loader rebuilds the vertices and triangles from the signs.
 
 // NOTE A coordinate is on a grid plane if it is closer than this part of the spacing
 const planeTolerance = 1e-3;
-// NOTE Nodes of a block that is the same as in the sample before it are not coded (FORMAT.md 4.5)
-export const blockSize = 8;
 const otherAxes = [
   [1, 2],
   [0, 2],
@@ -195,31 +195,6 @@ export const createVolume = ({ min, max }) => {
   const size = max.map((value, axis) => value + 1 - first[axis] + 1);
 
   return { first, size, count: size[0] * size[1] * size[2] };
-};
-
-// NOTE Local edge of a cell: x edges 0 to 3, y edges 4 to 7, z edges 8 to 11; the 2 other axes give the number
-const cornerOffsets = [...Array(8).keys()].map((corner) => [
-  corner & 1,
-  (corner >> 1) & 1,
-  (corner >> 2) & 1,
-]);
-
-export const getLocalEdge = (axis, a, b) => axis * 4 + a + 2 * b;
-
-// NOTE Cell case: bit "corner" is the sign of corner (corner & 1, corner >> 1 & 1, corner >> 2 & 1)
-export const getCellCase = (signs, volume, cell) => {
-  const [nx, ny] = volume.size;
-  let value = 0;
-
-  for (let corner = 0; corner < 8; corner++) {
-    const [dx, dy, dz] = cornerOffsets[corner];
-
-    if (signs[cell + dx + dy * nx + dz * nx * ny]) {
-      value |= 1 << corner;
-    }
-  }
-
-  return value;
 };
 
 const fail = (reason) => ({ error: reason });
@@ -585,7 +560,7 @@ export const analyseSurface = (sample, grid, volume, cornerSign) => {
         }
 
         if (nodeCells.has(cell)) {
-          neededCases.set(cell, getCellCase(signs, volume, cell));
+          neededCases.set(cell, getCellCase(signs, volume.size, cell));
           continue;
         }
 
@@ -593,7 +568,7 @@ export const analyseSurface = (sample, grid, volume, cornerSign) => {
           .map((triangle) => triangle.join(','))
           .sort();
 
-        cases.set(cell, [getCellCase(signs, volume, cell), triangles.join(' ')]);
+        cases.set(cell, [getCellCase(signs, volume.size, cell), triangles.join(' ')]);
       }
     }
   }
@@ -626,76 +601,4 @@ export const learnCases = (table, cases) => {
   }
 
   return true;
-};
-
-// NOTE Context of a node: 3 nodes before it, the node and 3 nodes after it in the sample before (FORMAT.md 4.5)
-export const getNodeContext = (signs, previous, node, x, y, z, nx, ny, nz) =>
-  (x > 0 ? signs[node - 1] : 0) |
-  ((y > 0 ? signs[node - nx] : 0) << 1) |
-  ((z > 0 ? signs[node - nx * ny] : 0) << 2) |
-  (previous[node] << 3) |
-  ((x < nx - 1 ? previous[node + 1] : 0) << 4) |
-  ((y < ny - 1 ? previous[node + nx] : 0) << 5) |
-  ((z < nz - 1 ? previous[node + nx * ny] : 0) << 6);
-
-export const createSurfaceModels = (tBits) => ({
-  blocks: createModels(2),
-  nodes: createModels(128),
-  t: createModels(1 << (tBits + 1)),
-});
-
-// NOTE Sample chunk: block flags and node signs, then the t code of each crossing edge (FORMAT.md 4.5)
-export const encodeSurfaceSample = (signs, previous, volume, tValues, tBits) => {
-  const [nx, ny, nz] = volume.size;
-  const models = createSurfaceModels(tBits);
-  const encoder = new BitEncoder();
-  const maxCode = (1 << tBits) - 1;
-  let lastFlag = 1;
-
-  for (let bz = 0; bz < nz; bz += blockSize) {
-    for (let by = 0; by < ny; by += blockSize) {
-      for (let bx = 0; bx < nx; bx += blockSize) {
-        const ex = Math.min(bx + blockSize, nx);
-        const ey = Math.min(by + blockSize, ny);
-        const ez = Math.min(bz + blockSize, nz);
-        let same = 1;
-
-        for (let z = bz; z < ez && same; z++) {
-          for (let y = by; y < ey && same; y++) {
-            for (let x = bx, node = x + y * nx + z * nx * ny; x < ex; x++, node++) {
-              if (signs[node] !== previous[node]) {
-                same = 0;
-                break;
-              }
-            }
-          }
-        }
-
-        encoder.encode(same, models.blocks, lastFlag);
-        lastFlag = same;
-
-        if (same) {
-          continue;
-        }
-
-        for (let z = bz; z < ez; z++) {
-          for (let y = by; y < ey; y++) {
-            for (let x = bx, node = x + y * nx + z * nx * ny; x < ex; x++, node++) {
-              encoder.encode(
-                signs[node],
-                models.nodes,
-                getNodeContext(signs, previous, node, x, y, z, nx, ny, nz)
-              );
-            }
-          }
-        }
-      }
-    }
-  }
-
-  for (const t of tValues) {
-    encoder.encodeBits(Math.min(Math.floor(t * (maxCode + 1)), maxCode), tBits, models.t, 0);
-  }
-
-  return encoder.finish();
 };

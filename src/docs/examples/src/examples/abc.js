@@ -1,6 +1,6 @@
 import * as Three from 'three';
-import { loadAlembic } from 'alembic';
-import { ABCLoader, createVertexAnimationMaterial } from 'three-alembic';
+import { loadAlembic, loadWabc } from 'alembic';
+import { ABCLoader, WABCLoader, createVertexAnimationMaterial } from 'three-alembic';
 import { SimpleDropzone } from 'simple-dropzone';
 import { camera, controls } from '../main';
 import { dropTarget, getController, setGuiFields } from '../utils/gui';
@@ -8,7 +8,11 @@ import { setLoading } from '../utils/loading';
 import { loadEnvironment, loaders } from '../utils/resources';
 
 let targetScene, model;
+// NOTE The .abc file dropped with a .wabc file, to compare them
+let reference = null;
 let dropId = 0;
+
+const isAnimation = (object) => object?.isABCAnimation || object?.isWABCAnimation;
 
 const params = {
   playing: true,
@@ -17,6 +21,9 @@ const params = {
   frame: 0,
   time: 0.0,
   display: 'water',
+  compare: 'wabc',
+  errorScale: 1.0,
+  maxError: 0.0,
 };
 
 const originalMaterials = new Map();
@@ -43,13 +50,181 @@ loaders.texture.load('./assets/uv-1-4K.jpg', (texture) => {
   displayMaterials.uv.needsUpdate = true;
 });
 
+// NOTE Compare: the .abc mesh as a white wire over the .wabc mesh; error: the .wabc mesh coloured by its distance
+const wireMaterial = createVertexAnimationMaterial(
+  new Three.MeshBasicMaterial({ color: 0xffffff, wireframe: true })
+);
+const errorMaterial = new Three.MeshBasicMaterial({ vertexColors: true });
+
 const applyDisplay = () => {
   originalMaterials.forEach((material, mesh) => {
-    mesh.material = displayMaterials[params.display] ?? material;
+    mesh.material =
+      params.compare === 'error' && !mesh.userData.isReference
+        ? errorMaterial
+        : mesh.userData.isReference && params.compare === 'both'
+        ? wireMaterial
+        : displayMaterials[params.display] ?? material;
   });
+
+  if (model) {
+    model.visible = params.compare !== 'abc' || !reference;
+  }
+
+  if (reference) {
+    reference.visible = params.compare === 'abc' || params.compare === 'both';
+  }
+
+  errorState.geometries.clear();
+};
+
+// NOTE Distance of each .wabc vertex to the nearest .abc vertex of the mesh with the same full name, in world space.
+// Colours: blue (0) to green, yellow and red (the error scale and more). Made again when a geometry changes.
+const errorState = { geometries: new Map() };
+const errorColor = new Three.Color();
+
+// NOTE A .wabc geometry keeps spare room in its buffers: only "userData.vertexCount" vertices are used
+const getWorldPositions = (mesh) => {
+  const attribute = mesh.geometry.getAttribute('position');
+  const count = mesh.userData.vertexCount ?? attribute.count;
+  const out = new Float32Array(count * 3);
+  const point = new Three.Vector3();
+
+  mesh.updateWorldMatrix(true, false);
+
+  for (let vertex = 0; vertex < count; vertex++) {
+    point.fromBufferAttribute(attribute, vertex).applyMatrix4(mesh.matrixWorld);
+    point.toArray(out, vertex * 3);
+  }
+
+  return out;
+};
+
+const colorByError = (mesh, referenceMesh) => {
+  const scale = params.errorScale / 1000.0;
+  const cell = scale * 2.0;
+  const source = getWorldPositions(referenceMesh);
+  const target = getWorldPositions(mesh);
+  const cells = new Map();
+  const key = (x, y, z) =>
+    `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+
+  for (let point = 0; point < source.length / 3; point++) {
+    const id = key(source[point * 3], source[point * 3 + 1], source[point * 3 + 2]);
+
+    (cells.get(id) ?? cells.set(id, []).get(id)).push(point);
+  }
+
+  const colors = new Float32Array(target.length);
+  let maxError = 0.0;
+
+  for (let vertex = 0; vertex < target.length / 3; vertex++) {
+    const [x, y, z] = target.subarray(vertex * 3, vertex * 3 + 3);
+    const [cx, cy, cz] = [x, y, z].map((value) => Math.floor(value / cell));
+    let best = Infinity;
+
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          for (const point of cells.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? []) {
+            best = Math.min(
+              best,
+              Math.hypot(
+                source[point * 3] - x,
+                source[point * 3 + 1] - y,
+                source[point * 3 + 2] - z
+              )
+            );
+          }
+        }
+      }
+    }
+
+    maxError = Math.max(maxError, best);
+    // NOTE Hue 0.66 (blue) at 0, 0 (red) at the scale or more
+    errorColor.setHSL(0.66 * (1.0 - Math.min(best / scale, 1.0)), 1.0, 0.5);
+    errorColor.toArray(colors, vertex * 3);
+  }
+
+  mesh.geometry.setAttribute('color', new Three.BufferAttribute(colors, 3));
+
+  return maxError;
+};
+
+const updateErrorColors = () => {
+  if (params.compare !== 'error' || !model || !reference) {
+    return;
+  }
+
+  let changed = false;
+  let maxError = 0.0;
+
+  model.traverse((mesh) => {
+    if (!mesh.isMesh) {
+      return;
+    }
+
+    let match = null;
+
+    reference.traverse((child) => {
+      if (child.isMesh && child.userData.fullName === mesh.userData.fullName) {
+        match = child;
+      }
+    });
+
+    if (!match?.isMesh) {
+      return;
+    }
+
+    const state = errorState.geometries.get(mesh);
+
+    if (
+      state &&
+      state.version === mesh.userData.version &&
+      state.reference === match.geometry &&
+      state.scale === params.errorScale
+    ) {
+      maxError = Math.max(maxError, state.maxError);
+      return;
+    }
+
+    const error = colorByError(mesh, match);
+
+    errorState.geometries.set(mesh, {
+      version: mesh.userData.version,
+      reference: match.geometry,
+      scale: params.errorScale,
+      maxError: error,
+    });
+    maxError = Math.max(maxError, error);
+    changed = true;
+  });
+
+  if (changed) {
+    setFieldValue('maxError', Number((maxError * 1000.0).toFixed(3)));
+  }
+};
+
+const disposeObject = (object) => {
+  object.removeFromParent();
+
+  if (isAnimation(object)) {
+    object.dispose();
+  } else {
+    object.traverse((child) => {
+      child.geometry?.dispose();
+      child.material?.dispose();
+    });
+  }
 };
 
 const removeModel = () => {
+  if (reference) {
+    disposeObject(reference);
+    reference = null;
+  }
+
+  errorState.geometries.clear();
+
   if (!model) {
     return;
   }
@@ -60,17 +235,7 @@ const removeModel = () => {
   });
   originalMaterials.clear();
 
-  model.removeFromParent();
-
-  if (model.isABCAnimation) {
-    model.dispose();
-  } else {
-    model.traverse((child) => {
-      child.geometry?.dispose();
-      child.material?.dispose();
-    });
-  }
-
+  disposeObject(model);
   model = null;
 };
 
@@ -114,7 +279,7 @@ const showAnimationTime = () => {
 };
 
 const applyPlaybackParams = () => {
-  if (!model?.isABCAnimation) {
+  if (!isAnimation(model)) {
     return;
   }
 
@@ -194,9 +359,46 @@ const getPlaybackFields = () => {
   ];
 };
 
+const getCompareFields = () => [
+  {
+    folder: 'Compare .abc and .wabc',
+    children: [
+      {
+        id: 'compare',
+        name: 'Show',
+        defaultValue: params.compare,
+        options: { '.wabc': 'wabc', '.abc': 'abc', 'Both (.abc as wire)': 'both', Error: 'error' },
+        onChange: (value) => {
+          params.compare = value;
+          applyDisplay();
+          updateErrorColors();
+        },
+      },
+      {
+        id: 'errorScale',
+        name: 'Error scale (mm)',
+        defaultValue: params.errorScale,
+        min: 0.05,
+        max: 10.0,
+        step: 0.05,
+        onFinishChange: (value) => {
+          params.errorScale = value;
+          updateErrorColors();
+        },
+      },
+      {
+        id: 'maxError',
+        name: 'Max error (mm)',
+        defaultValue: params.maxError,
+      },
+    ],
+  },
+];
+
 const showGui = () => {
   setGuiFields([
-    ...(model?.isABCAnimation ? getPlaybackFields() : []),
+    ...(isAnimation(model) ? getPlaybackFields() : []),
+    ...(reference ? getCompareFields() : []),
     {
       folder: 'Scene',
       children: [
@@ -215,15 +417,29 @@ const showGui = () => {
   ]);
 };
 
-const showModel = (group) => {
+const showModel = (group, referenceGroup = null) => {
   model = group;
+  reference = referenceGroup;
   model.traverse((child) => {
     if (child.isMesh) {
       originalMaterials.set(child, child.material);
     }
   });
 
-  if (model.isABCAnimation) {
+  if (reference) {
+    reference.traverse((child) => {
+      if (child.isMesh) {
+        child.userData.isReference = true;
+        originalMaterials.set(child, child.material);
+      }
+    });
+    targetScene.add(reference);
+  }
+
+  // NOTE Geometries of a .wabc animation change when a sample is read
+  model.addEventListener?.('sample', () => updateErrorColors());
+
+  if (isAnimation(model)) {
     params.frame = model.frame;
     params.time = model.time;
   }
@@ -235,35 +451,35 @@ const showModel = (group) => {
   showGui();
 };
 
-const loadFile = (file) => {
+const readAbc = (url) => loadAlembic(url).then((reader) => new ABCLoader().parse(reader));
+const readWabc = (url) => loadWabc(url).then((file) => new WABCLoader().parse(file));
+
+// NOTE A .wabc file is shown; a .abc file dropped with it is the reference of the comparison
+const loadFiles = ({ abcFile, wabcFile }) => {
   const currentDropId = ++dropId;
-  const url = URL.createObjectURL(file);
+  const urls = [abcFile, wabcFile].filter(Boolean).map((file) => URL.createObjectURL(file));
+  const [abcUrl, wabcUrl] = [abcFile ? urls[0] : null, wabcFile ? urls.at(-1) : null];
   const startTime = performance.now();
+  const names = [abcFile?.name, wabcFile?.name].filter(Boolean).join(' + ');
 
   removeModel();
   showGui();
   setLoading('abc', true);
   dropTarget.innerHTML = '[Loading file - please wait...]';
 
-  loadAlembic(url)
-    .then((reader) => new ABCLoader().parse(reader))
-    .then((group) => {
+  Promise.all([abcUrl ? readAbc(abcUrl) : null, wabcUrl ? readWabc(wabcUrl) : null])
+    .then(([abcGroup, wabcGroup]) => {
       if (currentDropId !== dropId) {
-        if (group.isABCAnimation) {
-          group.dispose();
-        }
+        [abcGroup, wabcGroup].forEach((group) => group && isAnimation(group) && group.dispose());
 
         return;
       }
 
-      console.info(
-        'Alembic file loaded',
-        file.name,
-        `${(performance.now() - startTime).toFixed(0)}ms`
-      );
+      console.info('File loaded', names, `${(performance.now() - startTime).toFixed(0)}ms`);
 
-      dropTarget.innerHTML = '[Drop .ABC here]';
-      showModel(group);
+      dropTarget.innerHTML = '[Drop .ABC or .WABC here]';
+      params.compare = abcGroup && wabcGroup ? 'both' : 'wabc';
+      showModel(wabcGroup ?? abcGroup, wabcGroup ? abcGroup : null);
     })
     .catch((error) => {
       if (currentDropId === dropId) {
@@ -273,7 +489,7 @@ const loadFile = (file) => {
       console.error(error);
     })
     .finally(() => {
-      URL.revokeObjectURL(url);
+      urls.forEach((url) => URL.revokeObjectURL(url));
 
       if (currentDropId === dropId) {
         setLoading('abc', false);
@@ -283,18 +499,21 @@ const loadFile = (file) => {
 
 const dropzone = new SimpleDropzone(dropTarget, document.createElement('input'));
 
-dropTarget.innerHTML = '[Drop .ABC here]';
+dropTarget.innerHTML = '[Drop .ABC or .WABC here]';
 
+// NOTE One .abc file, one .wabc file, or both (to compare them)
 dropzone.on('drop', ({ files }) => {
-  const file = Array.from(files.values()).find(({ name }) => name.toLowerCase().endsWith('.abc'));
+  const list = Array.from(files.values());
+  const abcFile = list.find(({ name }) => name.toLowerCase().endsWith('.abc'));
+  const wabcFile = list.find(({ name }) => name.toLowerCase().endsWith('.wabc'));
 
-  if (!file) {
-    dropTarget.innerHTML = '[No .ABC file - please try again]';
+  if (!abcFile && !wabcFile) {
+    dropTarget.innerHTML = '[No .ABC or .WABC file - please try again]';
 
     return;
   }
 
-  loadFile(file);
+  loadFiles({ abcFile, wabcFile });
 });
 
 dropzone.on('droperror', ({ message }) => {
@@ -324,7 +543,7 @@ export const exampleABC = ({ scene }) => {
 
   // NOTE Once for each drawn frame, so the blend between samples moves smoothly
   const update = (now) => {
-    if (model?.isABCAnimation && model.playing) {
+    if (isAnimation(model) && model.playing) {
       model.update((now - lastTime) / 1000.0);
       showAnimationTime();
 
@@ -335,6 +554,12 @@ export const exampleABC = ({ scene }) => {
       }
     }
 
+    // NOTE The reference follows the time of the .wabc file
+    if (isAnimation(model) && isAnimation(reference) && reference.time !== model.time) {
+      reference.time = model.time;
+    }
+
+    updateErrorColors();
     lastTime = now;
     requestAnimationFrame(update);
   };

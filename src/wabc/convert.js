@@ -1,9 +1,8 @@
 import { closeSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { brotliCompressSync, constants as zlibConstants, deflateSync } from 'node:zlib';
-import { AlembicReader } from 'alembic';
+import { AlembicReader, WabcCodec } from 'alembic';
 import { createLayout, decodePositions, encodeGeometry, encodeLayer } from './encode.js';
-import { encodePoints } from './points.js';
 import { readFileInParts, getSha256 } from './files.js';
 import { areEqual, identity, invert, isIdentity, multiply, toF32 } from './matrices.js';
 import {
@@ -15,14 +14,9 @@ import {
   getPointsValues,
   sortPoints,
 } from './meshes.js';
-import {
-  analyseSurface,
-  createVolume,
-  detectGrid,
-  encodeSurfaceSample,
-  getNodeRange,
-  learnCases,
-} from './surface.js';
+import { analyseSurface, createVolume, detectGrid, getNodeRange, learnCases } from './surface.js';
+
+const { encodePoints, encodeSurfaceSample } = WabcCodec;
 import {
   createTimeSamplingTable,
   getTime,
@@ -428,7 +422,7 @@ const createSurfaceTrack = (schema, indices, tBits) => {
 
       result.neededCases.forEach((cellCase) => needed.add(cellCase));
       chunks.push({
-        bytes: encodeSurfaceSample(result.signs, previous, volume, result.tValues, tBits),
+        bytes: encodeSurfaceSample(result.signs, previous, volume.size, result.tValues, tBits),
         vertexCount: result.vertexCount,
         triangleCount: result.triangleCount,
       });
@@ -567,8 +561,9 @@ const createGeometryTrack = (entry, options, range, timeSamplings, chunks, event
     };
   }
 
+  // NOTE The surface mode has no uv (FORMAT.md 8.4)
   const surface =
-    type === 'mesh' && normals !== 'stored' && options.surfaceBits > 0
+    type === 'mesh' && normals !== 'stored' && !firstSample?.uvs && options.surfaceBits > 0
       ? createSurfaceTrack(schema, indices, options.surfaceBits)
       : null;
 
