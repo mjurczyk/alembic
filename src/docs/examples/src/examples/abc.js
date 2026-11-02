@@ -10,6 +10,8 @@ import { loadEnvironment, loaders } from '../utils/resources';
 let targetScene, model;
 // NOTE The .abc file dropped with a .wabc file, to compare them
 let reference = null;
+// NOTE The static model of the demo, around the .wabc animation
+let demoScene = null;
 let dropId = 0;
 
 const isAnimation = (object) => object?.isABCAnimation || object?.isWABCAnimation;
@@ -20,6 +22,8 @@ const params = {
   fps: 24,
   loop: true,
   frame: 0,
+  demo: 'fountain',
+  environment: 'uv-1',
   display: 'water',
   compare: 'wabc',
   errorScale: 1.0,
@@ -212,8 +216,18 @@ const disposeObject = (object) => {
   } else {
     object.traverse((child) => {
       child.geometry?.dispose();
-      child.material?.dispose();
+      [child.material ?? []].flat().forEach((material) => {
+        Object.values(material).forEach((value) => value?.isTexture && value.dispose());
+        material.dispose();
+      });
     });
+  }
+};
+
+const removeDemoScene = () => {
+  if (demoScene) {
+    disposeObject(demoScene);
+    demoScene = null;
   }
 };
 
@@ -241,22 +255,27 @@ const removeModel = () => {
 
 // NOTE Camera looks at the model from the side, at a distance that shows all of it.
 // "direction" is the side of the camera; "height" moves the camera up, in scene units.
+// With "frameScene", the camera shows the demo scene and not the model.
 const defaultView = { direction: new Three.Vector3(-1.0, 0.7, 1.0), height: 0.0 };
-const demoView = { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 };
 
-const frameModel = ({ direction, height } = defaultView) => {
-  const box = new Three.Box3().setFromObject(model);
+const getRadius = (box) => Math.max(box.getSize(new Three.Vector3()).length() / 2.0, 0.001);
+
+const frameModel = ({ direction, height, frameScene } = defaultView) => {
+  const modelBox = new Three.Box3().setFromObject(model);
+  const box = frameScene && demoScene ? new Three.Box3().setFromObject(demoScene) : modelBox;
+
+  if (!modelBox.isEmpty()) {
+    // NOTE Water thickness and tint depth follow the model size
+    displayMaterials.water.thickness = getRadius(modelBox) * 0.5;
+    displayMaterials.water.attenuationDistance = getRadius(modelBox) * 2.0;
+  }
 
   if (box.isEmpty()) {
     return;
   }
 
   const center = box.getCenter(new Three.Vector3());
-  const radius = Math.max(box.getSize(new Three.Vector3()).length() / 2.0, 0.001);
-
-  // NOTE Water thickness and tint depth follow the model size
-  displayMaterials.water.thickness = radius * 0.5;
-  displayMaterials.water.attenuationDistance = radius * 2.0;
+  const radius = getRadius(box);
 
   controls.target.copy(center);
   camera.position.copy(center).add(direction.clone().setLength(radius * 2.5));
@@ -394,6 +413,23 @@ const showGui = () => {
       folder: 'Scene',
       children: [
         {
+          id: 'demo',
+          name: 'Demo',
+          defaultValue: params.demo,
+          options: Object.fromEntries(Object.entries(demos).map(([id, { name }]) => [name, id])),
+          onChange: (value) => loadDemo(value),
+        },
+        {
+          id: 'environment',
+          name: 'EnvMap',
+          defaultValue: params.environment,
+          options: { 'Night Realistic': 'night', UV: 'uv-1' },
+          onChange: (value) => {
+            params.environment = value;
+            loadEnvironment(targetScene, value);
+          },
+        },
+        {
           id: 'display',
           name: 'Display',
           defaultValue: params.display,
@@ -445,10 +481,33 @@ const showModel = (group, referenceGroup = null, view = defaultView) => {
 const readAbc = (url) => loadAlembic(url).then((reader) => new ABCLoader().parse(reader));
 const readWabc = (url) => loadWabc(url).then((file) => new WABCLoader().parse(file));
 
-// NOTE The default demo, shown until a file is dropped
-const demoUrl = './assets/demo-water.wabc';
+// NOTE Demos: a .wabc animation in a static scene.
+// A dropped file stays in the scene of the demo.
+const demos = {
+  fountain: {
+    name: 'Fountain',
+    scene: './assets/fountain.glb',
+    wabc: './assets/flow.wabc',
+    view: { ...defaultView, frameScene: true },
+    // NOTE The file material is transparent. The water refraction does not show transparent objects.
+    material: (original) =>
+      new Three.MeshStandardMaterial({
+        map: original.map,
+        roughness: 0.85,
+        metalness: 0.0,
+        side: 2,
+        transparent: false,
+      }),
+  },
+  rocky: {
+    name: 'Rocky',
+    scene: './assets/demo-rock.glb',
+    wabc: './assets/demo-water.wabc',
+    view: { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 },
+  },
+};
 
-// NOTE load() gives [abcGroup, wabcGroup]. A newer load or drop cancels this one.
+// NOTE load() gives [abcGroup, wabcGroup, sceneGroup]. A newer load or drop cancels this one.
 const loadGroups = ({ names, load, onEnd, view }) => {
   const currentDropId = ++dropId;
   const startTime = performance.now();
@@ -459,14 +518,19 @@ const loadGroups = ({ names, load, onEnd, view }) => {
   dropTarget.innerHTML = '[Loading file - please wait...]';
 
   load()
-    .then(([abcGroup, wabcGroup]) => {
+    .then(([abcGroup, wabcGroup, sceneGroup]) => {
       if (currentDropId !== dropId) {
-        [abcGroup, wabcGroup].forEach((group) => group && isAnimation(group) && group.dispose());
+        [abcGroup, wabcGroup, sceneGroup].forEach((group) => group && disposeObject(group));
 
         return;
       }
 
       console.info('File loaded', names, `${(performance.now() - startTime).toFixed(0)}ms`);
+
+      if (sceneGroup) {
+        demoScene = sceneGroup;
+        targetScene.add(demoScene);
+      }
 
       dropTarget.innerHTML = '[Drop .ABC or .WABC here]';
       params.compare = abcGroup && wabcGroup ? 'both' : 'wabc';
@@ -500,15 +564,37 @@ const loadFiles = ({ abcFile, wabcFile }) => {
   });
 };
 
-// NOTE The demo file is large. The loading indicator shows the download progress.
-const loadDemo = () => {
+// NOTE The demo files are large. The loading indicator shows the download progress of the .wabc file.
+const loadDemo = (id) => {
+  const { scene, wabc, view, material } = demos[id];
+
+  // NOTE "material" makes the material of each mesh of the demo scene from the file material
+  const readScene = (gltf) => {
+    gltf.scene.traverse((child) => {
+      if (child.isMesh && material) {
+        const original = child.material;
+
+        child.material = material(original);
+        original.dispose();
+      }
+    });
+
+    return gltf.scene;
+  };
+
+  params.demo = id;
+  removeDemoScene();
   loadGroups({
-    names: demoUrl,
-    view: demoView,
+    names: [scene, wabc].join(' + '),
+    view,
     load: () =>
-      fetchWithProgress(demoUrl, setLoadingProgress).then((bytes) =>
-        Promise.all([null, new WABCLoader().parse(new WabcFile(bytes))])
-      ),
+      Promise.all([
+        null,
+        fetchWithProgress(wabc, setLoadingProgress).then((bytes) =>
+          new WABCLoader().parse(new WabcFile(bytes))
+        ),
+        loaders.gltf.loadAsync(scene).then(readScene),
+      ]),
   });
 };
 
@@ -546,15 +632,9 @@ export const exampleABC = ({ scene }) => {
 
   scene.add(new Three.HemisphereLight(0x88aaff, 0x443322, 0.5));
 
-  loadEnvironment(scene, 'uv-1');
+  loadEnvironment(scene, params.environment);
   showGui();
-
-  // NOTE Rock formation at the scene origin, shared by the demos
-  loaders.gltf.load('./assets/demo-rock.glb', (gltf) => {
-    scene.add(gltf.scene);
-  });
-
-  loadDemo();
+  loadDemo(params.demo);
 
   let lastTime = performance.now();
 
