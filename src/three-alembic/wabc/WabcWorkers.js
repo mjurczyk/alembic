@@ -1,8 +1,15 @@
 import { createContext, runJob } from './decodeJobs.js';
+import workerSource from './wabcWorker.js?worker-source';
 
 // NOTE Workers that read .wabc samples off the main thread. Worker 0 decodes surface signs, which must be in order.
 // The other workers build meshes and read the other tracks. Without Worker (for example in Node.js), or if a worker
 // cannot start, the jobs run in the page, one at a time.
+
+// NOTE One Blob URL for all workers, made when the first worker starts, as WVDBReader of three-openvdb
+let workerUrl = null;
+
+const getWorkerUrl = () =>
+  (workerUrl ??= URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' })));
 
 const getWorkerCount = () => {
   const cores = globalThis.navigator?.hardwareConcurrency ?? 2;
@@ -87,9 +94,7 @@ export class WabcWorkers {
     if (typeof Worker !== 'undefined') {
       try {
         for (let index = 0; index < count; index++) {
-          const worker = new Worker(new URL('./wabcWorker.js', import.meta.url), {
-            type: 'module',
-          });
+          const worker = new Worker(getWorkerUrl());
 
           this.runners.push(new WorkerRunner(worker, bytes));
         }
@@ -104,7 +109,7 @@ export class WabcWorkers {
       this.runners.push(new InlineRunner(bytes));
     }
 
-    // NOTE A worker that cannot load its module fails at start: then all jobs run in the page
+    // NOTE A worker that cannot load its script fails at start: then all jobs run in the page
     this.ready = Promise.all(this.runners.map((runner) => runner.ready)).catch((error) => {
       console.warn('The .wabc workers cannot start. Samples are read in the page.', error);
       this.runners.forEach((runner) => runner.terminate());
