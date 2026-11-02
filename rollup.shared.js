@@ -2,6 +2,9 @@ import { nodeResolve } from '@rollup/plugin-node-resolve';
 import uglify from '@lopatnov/rollup-plugin-uglify';
 import copy from 'rollup-plugin-copy';
 import cleanUpDir from 'rollup-plugin-delete';
+import { rollup } from 'rollup';
+import { realpathSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 // NOTE Packages build into build/<name> at the repo root. Rollup runs in the package folder.
 export const getOutputDir = (name) => `../../build/${name}`;
@@ -27,6 +30,41 @@ export const copyPackageFiles = (name, fields) =>
 
 export const cleanOutputDir = (name) => cleanUpDir({ targets: getOutputDir(name), force: true });
 
+// NOTE "./file.js?worker-source" gives file.js and its imports as one script string, for a Blob URL worker. No worker
+// file is in the build.
+const workerSuffix = '?worker-source';
+
+export const inlineWorker = () => ({
+  name: 'inline-worker',
+  enforce: 'pre',
+  resolveId(source, importer) {
+    if (!source.endsWith(workerSuffix) || !importer) {
+      return null;
+    }
+
+    // NOTE The real path, so a symbolic link (for example /tmp on macOS) gives one module
+    const path = realpathSync(resolve(dirname(importer), source.slice(0, -workerSuffix.length)));
+
+    return `\0${path}${workerSuffix}`;
+  },
+  async load(id) {
+    if (!id.startsWith('\0') || !id.endsWith(workerSuffix)) {
+      return null;
+    }
+
+    const bundle = await rollup({
+      input: id.slice(1, -workerSuffix.length),
+      plugins: [nodeResolve(), uglify()],
+    });
+    const { output } = await bundle.generate({ format: 'iife' });
+
+    bundle.watchFiles.forEach((file) => this.addWatchFile(file));
+    await bundle.close();
+
+    return `export default ${JSON.stringify(output[0].code)};`;
+  },
+});
+
 // NOTE ESM and CJS builds of a library package
 export const createLibraryConfigs = ({ name, external = [] }) => [
   {
@@ -35,6 +73,7 @@ export const createLibraryConfigs = ({ name, external = [] }) => [
     external,
     plugins: [
       cleanOutputDir(name),
+      inlineWorker(),
       nodeResolve(),
       uglify(),
       copyPackageFiles(name, {
@@ -48,6 +87,6 @@ export const createLibraryConfigs = ({ name, external = [] }) => [
     input: './index.js',
     output: { file: `${getOutputDir(name)}/index.cjs.js`, format: 'cjs' },
     external,
-    plugins: [nodeResolve(), uglify()],
+    plugins: [inlineWorker(), nodeResolve(), uglify()],
   },
 ];
