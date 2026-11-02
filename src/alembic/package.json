@@ -1,6 +1,6 @@
 {
   "name": "alembic-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Alembic (.abc) and .wabc file reader in JavaScript. No dependencies.",
   "main": "./index.js",
   "module": "./index.js",
