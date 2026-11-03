@@ -12,11 +12,14 @@ export const camera = new Three.PerspectiveCamera(
   10000.0
 );
 export const scene = new Three.Scene();
-// NOTE ?webgl uses the WebGL2 fallback of WebGPURenderer
-export const renderer = new WebGPURenderer({
-  antialias: true,
-  forceWebGL: new URLSearchParams(window.location.search).has('webgl'),
-});
+// NOTE npm run dev:webgl uses WebGLRenderer and three-alembic/webgl. ?webgl uses the WebGL2 fallback of WebGPURenderer.
+export const renderer =
+  import.meta.env.VITE_RENDERER === 'webgl'
+    ? new Three.WebGLRenderer({ antialias: true })
+    : new WebGPURenderer({
+        antialias: true,
+        forceWebGL: new URLSearchParams(window.location.search).has('webgl'),
+      });
 export const controls = new OrbitControls(camera, renderer.domElement);
 
 document.querySelector('.package-version').innerHTML = `v${packageInfo.version}`;

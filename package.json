@@ -12,7 +12,8 @@
   "scripts": {
     "build": "npm run build -w alembic-web -w three-alembic -w webabc",
     "build:examples": "npm run build -w alembic-examples",
-    "dev": "npm run dev -w alembic-examples"
+    "dev": "npm run dev -w alembic-examples",
+    "dev:webgl": "npm run dev:webgl -w alembic-examples"
   },
   "author": {
     "name": "mjurczyk",
