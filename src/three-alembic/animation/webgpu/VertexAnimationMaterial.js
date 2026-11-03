@@ -43,7 +43,8 @@ export const createVertexAnimationMaterial = (material) => {
   return nodeMaterial;
 };
 
-// NOTE Backend of the vertex animation (see core/animationBackend.js)
+// NOTE Backend of the vertex animation (see core/animationBackend.js). Shadows use the position node of the material.
 export const vertexAnimationBackend = {
   createMaterial: createVertexAnimationMaterial,
+  setupObject: () => {},
 };

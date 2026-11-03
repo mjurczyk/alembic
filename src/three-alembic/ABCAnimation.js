@@ -163,6 +163,7 @@ export class ABCAnimation extends Three.Group {
 
       node.material = getAnimationBackend().createMaterial(material);
       material.dispose();
+      getAnimationBackend().setupObject(node);
 
       // NOTE The bounds of the geometry are the bounds of one sample
       node.frustumCulled = false;
@@ -472,6 +473,8 @@ export class ABCAnimation extends Three.Group {
     this.traverse((node) => {
       node.geometry?.dispose();
       node.material?.dispose();
+      node.customDepthMaterial?.dispose();
+      node.customDistanceMaterial?.dispose();
     });
   }
 }

@@ -354,7 +354,8 @@ export class VertexAnimation {
 
     this.layerSamples[layer] = index;
     this.sampleLayers.set(index, layer);
-    texture.addLayerUpdate(layer);
+    // NOTE three.js before r165 has no layer updates. Then all layers are sent again.
+    texture.addLayerUpdate?.(layer);
     texture.needsUpdate = true;
   }
 
