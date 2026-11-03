@@ -1,12 +1,12 @@
 {
   "name": "webabc",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI that converts Alembic (.abc) files into web-optimised .wabc files.",
   "scripts": {
     "build": "rollup --config ./rollup.config.js"
   },
   "dependencies": {
-    "alembic-web": "^0.2.0"
+    "alembic-web": "^0.3.0"
   },
   "keywords": [
     "webabc",
