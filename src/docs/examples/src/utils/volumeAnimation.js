@@ -1,6 +1,8 @@
 import * as Three from 'three';
 import { WabcFile } from 'alembic-web';
 import { WABCLoader } from 'three-alembic';
+import { frameRenderer } from 'three-openvdb';
+import { readRenderTimes } from '../main';
 import { getController } from './gui';
 import { VolumeSource } from './volumeSource';
 import { createVolumeView } from './volumeViews';
@@ -24,10 +26,22 @@ const params = {
   steps: 64,
   passScale: 0.5,
   lightIntensity: 20.0,
+  // NOTE Liquid view: density of the surface, index of refraction, world distance where the light has the color tint
+  surfaceLevel: 0.5,
+  ior: 1.333,
+  tintDistance: 1.0,
+  scatter: 0.1,
   showSource: false,
+  // NOTE Playback continues, but the grid on screen does not change. Shows the cost of a grid change.
+  freezeGrid: false,
 };
 
+// NOTE Each volume demo starts from these values and its own settings
+const defaultParams = { ...params };
+
 const stats = {
+  statCpu: '-',
+  statGpu: '-',
   statSource: '-',
   statGrid: '-',
   statDecode: '-',
@@ -175,8 +189,13 @@ export class VolumeAnimation extends Three.Group {
     const { frame, source, counters } = this;
     const result = source.get(frame);
 
-    if (result && result !== this.shownResult && result.resolution === source.info.resolution) {
-      this.view.setDensity(result.density);
+    if (
+      !params.freezeGrid &&
+      result &&
+      result !== this.shownResult &&
+      result.resolution === source.info.resolution
+    ) {
+      this.view.setDensity(result.density, result.coarse);
       this.shownResult = result;
       counters.updates++;
       counters.decodeTime += result.decodeTime;
@@ -203,7 +222,10 @@ export class VolumeAnimation extends Three.Group {
     }
 
     const { updates, decodeTime, gridTime } = counters;
+    const { cpuTime, gpuTime } = readRenderTimes();
 
+    setStat('statCpu', cpuTime === null ? '-' : cpuTime.toFixed(2));
+    setStat('statGpu', gpuTime === null ? '-' : gpuTime.toFixed(2));
     setStat('statUpdates', (updates / elapsed).toFixed(1));
     setStat('statDecode', updates ? (decodeTime / updates).toFixed(1) : '-');
     setStat('statBuild', updates ? (gridTime / updates).toFixed(1) : '-');
@@ -227,8 +249,16 @@ export class VolumeAnimation extends Three.Group {
   }
 }
 
-export const loadVolumeAnimation = async (bytes, context) => {
+// NOTE "settings": values of "params" for this demo, for example { renderer: 'liquid' }
+export const loadVolumeAnimation = async (bytes, context, settings = {}) => {
   const source = new VolumeSource();
+
+  Object.assign(params, defaultParams, settings);
+
+  // NOTE WebGLRenderer has no liquid view
+  if (useWebGLRenderer && params.renderer === 'liquid') {
+    params.renderer = defaultParams.renderer;
+  }
 
   try {
     await source.open(bytes, { resolution: params.resolution, smooth: params.smooth });
@@ -252,6 +282,10 @@ const getSliderFields = (animation) =>
       : [
           ['passScale', 'Pass scale (three.js)', 0.25, 1.0, 0.05],
           ['lightIntensity', 'Point light (three.js)', 0.0, 200.0, 0.5],
+          ['surfaceLevel', 'Surface level (liquid)', 0.05, 0.95, 0.01],
+          ['ior', 'IOR (liquid)', 1.0, 2.0, 0.001],
+          ['tintDistance', 'Tint distance (liquid)', 0.05, 10.0, 0.05],
+          ['scatter', 'Murk (liquid)', 0.0, 1.0, 0.01],
         ]),
   ].map(([id, name, min, max, step]) => ({
     id,
@@ -266,6 +300,53 @@ const getSliderFields = (animation) =>
     },
   }));
 
+// NOTE Settings of the FrameVolume renderer that change the GPU cost most. They apply in the next frame.
+const getFrameRendererFields = () => {
+  const { settings } = frameRenderer;
+  const setting = (id, name, extra) => ({
+    id: `frame-${id}`,
+    name,
+    defaultValue: settings[id],
+    onChange: (value) => {
+      settings[id] = value;
+    },
+    ...extra,
+  });
+
+  return {
+    folder: 'Frame renderer',
+    children: [
+      {
+        id: 'frame-froxels',
+        name: 'Froxels (x, y)',
+        defaultValue: settings.width,
+        min: 64,
+        max: 512,
+        step: 32,
+        onChange: (value) => {
+          settings.width = value;
+          settings.height = value;
+        },
+      },
+      setting('depth', 'Froxel slices', { min: 8, max: 64, step: 4 }),
+      setting('subSteps', 'Sub steps', { min: 4, max: 64, step: 1 }),
+      setting('shadowResolution', 'Shadow grid', { min: 16, max: 128, step: 8 }),
+      setting('environmentLighting', 'Environment light', {
+        options: {
+          Directional: 'directional',
+          'Spherical harmonics': 'spherical-harmonics',
+          Outward: 'outward',
+        },
+      }),
+      setting('environmentSamples', 'Environment samples', { min: 1, max: 16, step: 1 }),
+      setting('multipleScattering', 'Multiple scattering', {
+        options: { Off: false, Diffusion: true },
+      }),
+      setting('temporal', 'Temporal'),
+    ],
+  };
+};
+
 export const getVolumeFields = (animation) => [
   {
     folder: 'Volume',
@@ -277,6 +358,7 @@ export const getVolumeFields = (animation) => [
         options: {
           'three-openvdb FrameVolume': 'frame',
           [useWebGLRenderer ? 'three.js GLSL ray march' : 'three.js VolumeNodeMaterial']: 'builtin',
+          ...(useWebGLRenderer ? {} : { 'Liquid (prototype)': 'liquid' }),
         },
         onChange: (value) => {
           params.renderer = value;
@@ -327,11 +409,22 @@ export const getVolumeFields = (animation) => [
           animation.showSourceModel();
         },
       },
+      {
+        id: 'freezeGrid',
+        name: 'Freeze grid',
+        defaultValue: params.freezeGrid,
+        onChange: (value) => {
+          params.freezeGrid = value;
+        },
+      },
     ],
   },
+  getFrameRendererFields(),
   {
     folder: 'Volume stats',
     children: [
+      ['statCpu', 'Render CPU (ms)'],
+      ['statGpu', 'Render GPU (ms)'],
       ['statSource', 'Source'],
       ['statGrid', 'Grid'],
       ['statDecode', 'Decode (ms)'],

@@ -1,22 +1,49 @@
 import * as Three from 'three';
-import { RenderPipeline, VolumeNodeMaterial } from 'three/webgpu';
+import { NodeMaterial, RenderPipeline, VolumeNodeMaterial } from 'three/webgpu';
 import {
+  Break,
   Fn,
+  If,
+  Loop,
+  bool,
+  cameraPosition,
+  cameraProjectionMatrix,
+  cameraProjectionMatrixInverse,
+  cameraViewMatrix,
+  cameraWorldMatrix,
+  equirectUV,
+  float,
+  getScreenPosition,
+  getViewPosition,
+  max,
+  min,
+  mix,
+  modelWorldMatrix,
   modelWorldMatrixInverse,
   pass,
+  positionGeometry,
+  reflect,
+  refract,
   screenCoordinate,
   screenUV,
+  select,
   step,
+  texture,
   texture3D,
   uniform,
+  varying,
+  vec2,
   vec3,
   vec4,
+  viewportDepthTexture,
+  viewportSharedTexture,
 } from 'three/tsl';
 import { bayer16 } from 'three/examples/jsm/tsl/math/Bayer.js';
 import { FrameVolume } from 'three-openvdb';
+import { coarseBlockSize } from './volumeGrids';
 
 // NOTE Views of one density grid (resolution^3 bytes) in a world box. "frame": FrameVolume of three-openvdb.
-// "builtin": three.js only.
+// "builtin": three.js only. "liquid": surface prototype, WebGPU only.
 
 const useWebGLRenderer = import.meta.env.VITE_RENDERER === 'webgl';
 
@@ -328,9 +355,315 @@ const createShaderView = ({ resolution, bbox, params, scene }) => {
   return view;
 };
 
+// NOTE Box of size 1 at the origin, in local space. Distances to the entry and the exit of the ray.
+const hitUnitBox = Fn(([origin, direction]) => {
+  const inverse = direction.reciprocal();
+  const near = vec3(-0.5).sub(origin).mul(inverse);
+  const far = vec3(0.5).sub(origin).mul(inverse);
+  const entry = min(near, far);
+  const exit = max(near, far);
+
+  return vec2(max(entry.x, max(entry.y, entry.z)), min(exit.x, min(exit.y, exit.z)));
+});
+
+// NOTE Liquid (prototype, WebGPU): a surface where the density is the surface level. Fresnel reflection of the
+// environment and the sun. Refraction through the liquid, with Beer-Lambert absorption of the scene behind.
+const createLiquidView = ({ resolution, bbox, params, scene }) => {
+  const densityTexture = createDensityTexture(resolution);
+  const coarseSize = Math.ceil(resolution / coarseBlockSize);
+  const coarseTexture = createDensityTexture(coarseSize);
+  const placeholderEnvironment = new Three.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  const box = toBox(bbox);
+  const boxSize = box.getSize(new Three.Vector3());
+
+  const getEnvironment = () =>
+    scene.environment?.isTexture ? scene.environment : placeholderEnvironment;
+
+  coarseTexture.minFilter = Three.NearestFilter;
+  coarseTexture.magFilter = Three.NearestFilter;
+  placeholderEnvironment.needsUpdate = true;
+
+  const uniforms = {
+    level: uniform(0.5),
+    ior: uniform(1.333),
+    // NOTE Absorption of each channel for one world unit: -ln(tint) / tint distance
+    absorption: uniform(new Three.Vector3()),
+    tint: uniform(new Three.Color()),
+    scatter: uniform(0.1),
+    boxSize: uniform(boxSize),
+    sunDirection: uniform(new Three.Vector3(0.0, 1.0, 0.0)),
+    sunColor: uniform(new Three.Color()),
+    skyColor: uniform(new Three.Color()),
+    environmentIntensity: uniform(1.0),
+  };
+  // NOTE Environment texture nodes of the shader. They are made when the material is built.
+  const environmentNodes = [];
+  const texel = 1.0 / resolution;
+  const sampleDensity = (position) => texture3D(densityTexture, position.add(0.5), 0).r;
+
+  // NOTE Outward normal in local space: the density goes up into the liquid. "fallback" where the density is flat.
+  const getNormal = (position, fallback) => {
+    const dx = vec3(texel * 1.5, 0.0, 0.0);
+    const dy = vec3(0.0, texel * 1.5, 0.0);
+    const dz = vec3(0.0, 0.0, texel * 1.5);
+
+    const gradient = vec3(
+      sampleDensity(position.sub(dx)).sub(sampleDensity(position.add(dx))),
+      sampleDensity(position.sub(dy)).sub(sampleDensity(position.add(dy))),
+      sampleDensity(position.sub(dz)).sub(sampleDensity(position.add(dz)))
+    ).toVar();
+
+    return select(gradient.dot(gradient).greaterThan(1e-10), gradient.normalize(), fallback);
+  };
+
+  // NOTE The box has no rotation. A local vector becomes a world vector with the box size.
+  const toWorldNormal = (normal) => normal.div(uniforms.boxSize).normalize();
+  const toLocalDirection = (direction) => direction.div(uniforms.boxSize).normalize();
+
+  const origin = varying(modelWorldMatrixInverse.mul(vec4(cameraPosition, 1.0)).xyz);
+  const direction = varying(positionGeometry.sub(origin));
+
+  const liquidNode = Fn(() => {
+    const rayDirection = direction.normalize().toVar();
+    // NOTE Scene depth before any discard: textures are read in uniform control flow
+    const sceneDepth = viewportDepthTexture(screenUV, 0).x;
+    const sceneView = getViewPosition(screenUV, sceneDepth, cameraProjectionMatrixInverse);
+    const sceneLocal = modelWorldMatrixInverse.mul(cameraWorldMatrix.mul(vec4(sceneView, 1.0))).xyz;
+    const sceneDistance = sceneLocal.sub(origin).dot(rayDirection);
+    const bounds = hitUnitBox(origin, rayDirection).toVar();
+    // NOTE Camera in the liquid: no surface, the ray goes straight to the scene or out of the liquid
+    const underwater = bounds.x
+      .lessThan(0.0)
+      .and(sampleDensity(origin).greaterThanEqual(uniforms.level))
+      .toVar();
+    const end = min(bounds.y, sceneDistance).toVar();
+    const distance = max(bounds.x, 0.0).toVar();
+    const previous = distance.toVar();
+    const hit = bool(false).toVar();
+    const fineStep = texel * 0.75;
+    // NOTE A zero direction component gives a large distance to the cell side, not a division by zero
+    const safeDirection = rayDirection.add(step(rayDirection.abs(), vec3(1e-6)).mul(1e-6));
+
+    Loop(512, () => {
+      If(distance.greaterThan(end), () => {
+        Break();
+      });
+
+      const position = origin.add(rayDirection.mul(distance));
+      const coarse = texture3D(coarseTexture, position.add(0.5), 0).r;
+
+      If(coarse.equal(0.0), () => {
+        // NOTE Empty cell: go to the side where the ray leaves it
+        const cell = position.add(0.5).mul(coarseSize).floor();
+        const cellMin = cell.div(coarseSize).sub(0.5);
+        const side = mix(cellMin, cellMin.add(1.0 / coarseSize), step(0.0, rayDirection));
+        const exits = side.sub(position).div(safeDirection);
+
+        previous.assign(distance);
+        distance.addAssign(max(min(exits.x, min(exits.y, exits.z)), 0.0).add(1e-4));
+      }).Else(() => {
+        If(sampleDensity(position).greaterThanEqual(uniforms.level), () => {
+          hit.assign(true);
+          Break();
+        });
+
+        previous.assign(distance);
+        distance.addAssign(fineStep);
+      });
+    });
+
+    hit.not().discard();
+
+    // NOTE The surface is between the last sample out of the liquid and the first sample in it
+    const outside = previous.toVar();
+    const inside = distance.toVar();
+
+    Loop(6, () => {
+      const middle = outside.add(inside).mul(0.5);
+      const isInside = sampleDensity(origin.add(rayDirection.mul(middle))).greaterThanEqual(
+        uniforms.level
+      );
+
+      inside.assign(select(isInside, middle, inside));
+      outside.assign(select(isInside, outside, middle));
+    });
+
+    const surface = origin.add(rayDirection.mul(inside)).toVar();
+    const surfaceWorld = modelWorldMatrix.mul(vec4(surface, 1.0)).xyz;
+    // NOTE From the ray, not from the camera position: in the liquid, the surface point is the camera
+    const view = rayDirection.mul(uniforms.boxSize).normalize().negate();
+    const incident = view.negate();
+    const normal = select(
+      underwater,
+      view,
+      toWorldNormal(getNormal(surface, rayDirection.negate()))
+    ).toVar();
+    const cosine = normal.dot(view).clamp(0.0, 1.0);
+    const reflectance = uniforms.ior.sub(1.0).div(uniforms.ior.add(1.0)).pow2();
+    const fresnel = select(
+      underwater,
+      0.0,
+      reflectance.add(reflectance.oneMinus().mul(cosine.oneMinus().pow(5.0)))
+    );
+
+    // NOTE Reflection: environment and a sharp sun highlight
+    const reflected = reflect(incident, normal);
+    const environmentNode = texture(getEnvironment(), equirectUV(reflected), 0);
+
+    environmentNodes.push(environmentNode);
+
+    const environment = environmentNode.rgb.mul(uniforms.environmentIntensity);
+    const halfVector = uniforms.sunDirection.add(view).normalize();
+    const highlight = normal
+      .dot(halfVector)
+      .clamp(0.0, 1.0)
+      .pow(1000.0)
+      .mul(40.0)
+      .mul(normal.dot(uniforms.sunDirection).clamp(0.0, 1.0));
+    const reflection = environment.mul(fresnel).add(uniforms.sunColor.mul(highlight).mul(fresnel));
+
+    // NOTE Refraction: the bent ray goes through the liquid to its exit, or to the scene behind it
+    const refracted = refract(incident, normal, uniforms.ior.reciprocal()).normalize();
+    const insideDirection = toLocalDirection(refracted).toVar();
+    const insideScale = insideDirection.mul(uniforms.boxSize).length();
+    const insideEnd = min(hitUnitBox(surface, insideDirection).y, end.sub(inside));
+    const travelled = float(texel).toVar();
+
+    Loop(256, () => {
+      If(
+        travelled
+          .greaterThan(insideEnd)
+          .or(sampleDensity(surface.add(insideDirection.mul(travelled))).lessThan(uniforms.level)),
+        () => {
+          Break();
+        }
+      );
+
+      travelled.addAssign(texel);
+    });
+
+    const thickness = travelled.min(insideEnd).max(0.0).mul(insideScale);
+    const exitLocal = surface.add(insideDirection.mul(travelled.min(insideEnd)));
+    const exitWorld = modelWorldMatrix.mul(vec4(exitLocal, 1.0)).xyz;
+    // NOTE Out of the liquid: the second refraction. With total internal reflection, the ray does not bend.
+    const exitNormal = toWorldNormal(getNormal(exitLocal, insideDirection));
+    const bent = refract(refracted, exitNormal.negate(), uniforms.ior);
+    const outDirection = select(bent.dot(bent).greaterThan(0.0), bent.normalize(), refracted);
+    // NOTE With no scene object behind the liquid, the far plane gives a point far away, in the out direction
+    const sceneWorldDistance = max(sceneDistance.sub(inside), 0.0).mul(
+      rayDirection.mul(uniforms.boxSize).length()
+    );
+    const behind = exitWorld.add(outDirection.mul(max(sceneWorldDistance.sub(thickness), 0.01)));
+    const behindView = cameraViewMatrix.mul(vec4(behind, 1.0)).xyz;
+    const refractedUV = getScreenPosition(behindView, cameraProjectionMatrix)
+      .clamp(0.0, 1.0)
+      .toVar();
+    // NOTE A scene object in front of the surface must not show through the liquid
+    const surfaceViewZ = cameraViewMatrix.mul(vec4(surfaceWorld, 1.0)).z;
+    const behindDepth = viewportDepthTexture(refractedUV, 0).x;
+    const behindViewZ = getViewPosition(refractedUV, behindDepth, cameraProjectionMatrixInverse).z;
+    const backdropUV = select(behindViewZ.greaterThan(surfaceViewZ), screenUV, refractedUV);
+    const backdrop = viewportSharedTexture(backdropUV, 0).rgb;
+    const transmittance = uniforms.absorption.mul(thickness).negate().exp();
+    // NOTE Murky liquid: light of the sky and the sun scattered in the liquid
+    const scattered = transmittance
+      .oneMinus()
+      .mul(uniforms.tint)
+      .mul(uniforms.scatter)
+      .mul(
+        uniforms.skyColor.add(
+          uniforms.sunColor.mul(normal.dot(uniforms.sunDirection).clamp(0.0, 1.0))
+        )
+      );
+    const transmitted = backdrop.mul(transmittance).add(scattered).mul(fresnel.oneMinus());
+
+    return vec4(reflection.add(transmitted), 1.0);
+  })();
+
+  const material = new NodeMaterial();
+
+  material.fragmentNode = liquidNode;
+  material.side = Three.BackSide;
+  material.transparent = true;
+  // NOTE The shader stops the ray at the scene depth. A depth test on the box sides removes liquid in front of objects in the box.
+  material.depthTest = false;
+  material.depthWrite = false;
+  material.fog = false;
+
+  const mesh = new Three.Mesh(new Three.BoxGeometry(1.0, 1.0, 1.0), material);
+  const sunPosition = new Three.Vector3();
+  const targetPosition = new Three.Vector3();
+
+  placeInBox(mesh, box);
+
+  const view = {
+    object: mesh,
+    setDensity: (data, coarse) => {
+      setTextureData(densityTexture, data);
+
+      if (coarse) {
+        setTextureData(coarseTexture, coarse);
+      }
+    },
+    setParams: (params) => {
+      uniforms.level.value = params.surfaceLevel;
+      uniforms.ior.value = params.ior;
+      uniforms.tint.value.set(params.color);
+      uniforms.scatter.value = params.scatter;
+
+      const { r, g, b } = uniforms.tint.value;
+      const scale = params.absorbance / params.tintDistance;
+
+      uniforms.absorption.value.set(
+        ...[r, g, b].map((channel) => -Math.log(Math.max(channel, 1e-3)) * scale)
+      );
+    },
+    update: () => {
+      const [sun] = scene.getObjectsByProperty('isDirectionalLight', true);
+      const [sky] = scene.getObjectsByProperty('isHemisphereLight', true);
+      const environment = getEnvironment();
+
+      environmentNodes.forEach((node) => {
+        node.value = environment;
+      });
+
+      uniforms.environmentIntensity.value = scene.environment ? scene.environmentIntensity : 0.0;
+      uniforms.sunColor.value.setScalar(0.0);
+      uniforms.skyColor.value.setScalar(0.0);
+
+      if (sun) {
+        sun.getWorldPosition(sunPosition);
+        sun.target.getWorldPosition(targetPosition);
+        uniforms.sunDirection.value.subVectors(sunPosition, targetPosition).normalize();
+        uniforms.sunColor.value.copy(sun.color).multiplyScalar(sun.intensity);
+      }
+
+      if (sky) {
+        uniforms.skyColor.value.copy(sky.color).multiplyScalar(sky.intensity);
+      }
+    },
+    dispose: () => {
+      mesh.removeFromParent();
+      mesh.geometry.dispose();
+      material.dispose();
+      densityTexture.dispose();
+      coarseTexture.dispose();
+      placeholderEnvironment.dispose();
+    },
+  };
+
+  view.setParams(params);
+
+  return view;
+};
+
 export const createVolumeView = (type, options) => {
   if (type === 'frame') {
     return createFrameView(options);
+  }
+
+  if (type === 'liquid' && !useWebGLRenderer) {
+    return createLiquidView(options);
   }
 
   return useWebGLRenderer ? createShaderView(options) : createNodeView(options);

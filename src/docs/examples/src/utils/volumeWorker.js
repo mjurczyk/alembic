@@ -1,5 +1,6 @@
 import { WabcFile } from 'alembic-web';
 import {
+  getCoarseGrid,
   getPointsBox,
   getSurfaceLayout,
   pointsToDensity,
@@ -93,12 +94,14 @@ const readSample = async ({ sample, smooth }) => {
     resolution,
     smooth
   );
+  const coarse = getCoarseGrid(density, resolution);
   const end = performance.now();
 
   return {
     sample,
     resolution,
     density,
+    coarse,
     count: kind === 'surface' ? decoded.edges.length : position.length / 3,
     decodeTime: gridStart - decodeStart,
     gridTime: end - gridStart,
@@ -115,7 +118,7 @@ self.onmessage = ({ data }) => {
       } else {
         const result = await readSample(data);
 
-        self.postMessage({ id: data.id, result }, [result.density.buffer]);
+        self.postMessage({ id: data.id, result }, [result.density.buffer, result.coarse.buffer]);
       }
     } catch (error) {
       self.postMessage({ id: data.id, error: error.message });

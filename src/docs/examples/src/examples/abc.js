@@ -24,7 +24,7 @@ const params = {
   fps: 24,
   loop: true,
   frame: 0,
-  demo: 'fountain',
+  demo: 'fountainLiquid',
   environment: 'uv-1',
   display: 'water',
   compare: 'wabc',
@@ -500,7 +500,9 @@ const fountainMaterial = (original) =>
 
 const rockyView = { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 };
 
-// NOTE Demos: a .wabc animation in a static scene. "volume": shown as a volume.
+const liquidSettings = { renderer: 'liquid', tintDistance: 0.6 };
+
+// NOTE Demos: a .wabc animation in a static scene. "volume": shown as a volume, true or its volume settings.
 // A dropped file stays in the scene of the demo.
 const demos = {
   fountain: {
@@ -537,6 +539,29 @@ const demos = {
     wabc: './assets/demo-particles.wabc',
     view: { ...rockyView, frameScene: true },
     volume: true,
+  },
+  fountainLiquid: {
+    name: 'Fountain (liquid)',
+    scene: './assets/fountain.glb',
+    wabc: './assets/flow.wabc',
+    view: { ...defaultView, frameScene: true },
+    material: fountainMaterial,
+    volume: liquidSettings,
+  },
+  rockyLiquid: {
+    name: 'Rocky (liquid)',
+    scene: './assets/demo-rock.glb',
+    wabc: './assets/demo-water.wabc',
+    view: { ...rockyView, frameScene: true },
+    volume: liquidSettings,
+  },
+  // NOTE A particle is about one texel. More smooth passes and a lower level join the particles into one surface.
+  particlesLiquid: {
+    name: 'Rocky particles (liquid)',
+    scene: './assets/demo-rock.glb',
+    wabc: './assets/demo-particles.wabc',
+    view: { ...rockyView, frameScene: true },
+    volume: { ...liquidSettings, smooth: 2, surfaceLevel: 0.25 },
   },
 };
 
@@ -625,7 +650,11 @@ const loadDemo = (id) => {
         null,
         fetchWithProgress(wabc, setLoadingProgress).then((bytes) =>
           volume
-            ? loadVolumeAnimation(bytes, { scene: targetScene, camera, renderer, setRenderFrame })
+            ? loadVolumeAnimation(
+                bytes,
+                { scene: targetScene, camera, renderer, setRenderFrame },
+                volume === true ? {} : volume
+              )
             : new WABCLoader().parse(new WabcFile(bytes))
         ),
         loaders.gltf.loadAsync(scene).then(readScene),

@@ -174,31 +174,101 @@ export const smoothDensity = (density, resolution, passes) => {
   }
 
   const plane = resolution * resolution;
-  const strides = [1, resolution, plane];
   const last = resolution - 1;
   let source = density;
   let target = new Uint8Array(density.length);
 
-  for (let pass = 0; pass < passes; pass++) {
-    for (let axis = 0; axis < 3; axis++) {
-      const stride = strides[axis];
+  // NOTE The rows before and after a row on the y or z axis. At the grid side, the row itself.
+  const smoothRows = (stride) => {
+    for (let z = 0; z < resolution; z++) {
+      for (let y = 0; y < resolution; y++) {
+        const row = (y + z * resolution) * resolution;
+        const coordinate = stride === resolution ? y : z;
+        const before = coordinate > 0 ? row - stride : row;
+        const after = coordinate < last ? row + stride : row;
 
-      for (let z = 0, index = 0; z < resolution; z++) {
-        for (let y = 0; y < resolution; y++) {
-          for (let x = 0; x < resolution; x++, index++) {
-            const coordinate = axis === 0 ? x : axis === 1 ? y : z;
-            const value = source[index];
-            const before = coordinate > 0 ? source[index - stride] : value;
-            const after = coordinate < last ? source[index + stride] : value;
-
-            target[index] = (before + 2 * value + after + 2) >> 2;
-          }
+        for (let x = 0; x < resolution; x++) {
+          target[row + x] = (source[before + x] + 2 * source[row + x] + source[after + x] + 2) >> 2;
         }
       }
-
-      [source, target] = [target, source];
     }
+  };
+
+  const smoothColumns = () => {
+    for (let row = 0; row < source.length; row += resolution) {
+      const end = row + last;
+
+      target[row] = (3 * source[row] + source[row + Math.min(1, last)] + 2) >> 2;
+
+      for (let index = row + 1; index < end; index++) {
+        target[index] = (source[index - 1] + 2 * source[index] + source[index + 1] + 2) >> 2;
+      }
+
+      if (last > 0) {
+        target[end] = (source[end - 1] + 3 * source[end] + 2) >> 2;
+      }
+    }
+  };
+
+  for (let pass = 0; pass < passes; pass++) {
+    smoothColumns();
+    [source, target] = [target, source];
+    smoothRows(resolution);
+    [source, target] = [target, source];
+    smoothRows(plane);
+    [source, target] = [target, source];
   }
 
   return source;
+};
+
+// NOTE Texels on each side of a cell of the coarse grid
+export const coarseBlockSize = 8;
+
+// NOTE Coarse grid: the largest density of each cell and of the cells next to it. A ray march skips cells with 0.
+export const getCoarseGrid = (density, resolution) => {
+  const size = Math.ceil(resolution / coarseBlockSize);
+  const plane = resolution * resolution;
+  const cellMax = new Uint8Array(size ** 3);
+
+  for (let z = 0; z < resolution; z++) {
+    const cz = Math.floor(z / coarseBlockSize) * size * size;
+
+    for (let y = 0; y < resolution; y++) {
+      const cy = cz + Math.floor(y / coarseBlockSize) * size;
+      const row = y * resolution + z * plane;
+
+      for (let x = 0; x < resolution; x++) {
+        const value = density[row + x];
+        const cell = cy + Math.floor(x / coarseBlockSize);
+
+        if (value > cellMax[cell]) {
+          cellMax[cell] = value;
+        }
+      }
+    }
+  }
+
+  const coarse = new Uint8Array(cellMax.length);
+  const last = size - 1;
+
+  for (let z = 0, cell = 0; z < size; z++) {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++, cell++) {
+        let value = 0;
+
+        for (let nz = Math.max(z - 1, 0); nz <= Math.min(z + 1, last); nz++) {
+          for (let ny = Math.max(y - 1, 0); ny <= Math.min(y + 1, last); ny++) {
+            for (let nx = Math.max(x - 1, 0); nx <= Math.min(x + 1, last); nx++) {
+              value = Math.max(value, cellMax[nx + (ny + nz * size) * size]);
+            }
+          }
+        }
+
+        coarse[cell] = value;
+      }
+    }
+  }
+
+  return coarse;
 };
