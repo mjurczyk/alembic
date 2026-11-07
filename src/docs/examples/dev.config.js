@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { inlineWorker } from '../../../rollup.shared.js';
 
-// NOTE VITE_RENDERER=webgl runs the examples with WebGLRenderer, three-alembic/webgl and three-openvdb/webgl
+// NOTE VITE_RENDERER=webgl runs the examples with WebGLRenderer and three-alembic/webgl
 const useWebGLRenderer = process.env.VITE_RENDERER === 'webgl';
 
 export default defineConfig({
@@ -10,10 +10,7 @@ export default defineConfig({
   cacheDir: useWebGLRenderer ? 'node_modules/.vite-webgl' : 'node_modules/.vite',
   resolve: {
     alias: useWebGLRenderer
-      ? [
-          { find: /^three-alembic$/, replacement: 'three-alembic/webgl' },
-          { find: /^three-openvdb$/, replacement: 'three-openvdb/webgl' },
-        ]
+      ? [{ find: /^three-alembic$/, replacement: 'three-alembic/webgl' }]
       : [],
   },
 });

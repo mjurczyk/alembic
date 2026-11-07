@@ -451,7 +451,7 @@ const showModel = (group, referenceGroup = null, view = defaultView) => {
   model = group;
   reference = referenceGroup;
 
-  // NOTE A volume keeps its own materials
+  // NOTE A liquid keeps its own materials
   if (!model.isVolumeAnimation) {
     model.traverse((child) => {
       if (child.isMesh) {
@@ -500,10 +500,10 @@ const fountainMaterial = (original) =>
 
 const rockyView = { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 };
 
-const liquidSettings = { renderer: 'liquid', tintDistance: 0.6 };
+const liquidSettings = { tintDistance: 0.6 };
 
-// NOTE Demos: a .wabc animation in a static scene. "volume": shown as a volume, true or its volume settings.
-// A dropped file stays in the scene of the demo.
+// NOTE Demos: a .wabc animation in a static scene. A dropped file stays in the scene of the demo.
+// NOTE "volume": settings of the liquid view (volumeAnimation.js). The demo shows the file as a liquid.
 const demos = {
   fountain: {
     name: 'Fountain',
@@ -517,28 +517,6 @@ const demos = {
     scene: './assets/demo-rock.glb',
     wabc: './assets/demo-water.wabc',
     view: rockyView,
-  },
-  fountainVolume: {
-    name: 'Fountain (volume)',
-    scene: './assets/fountain.glb',
-    wabc: './assets/flow.wabc',
-    view: { ...defaultView, frameScene: true },
-    material: fountainMaterial,
-    volume: true,
-  },
-  rockyVolume: {
-    name: 'Rocky (volume)',
-    scene: './assets/demo-rock.glb',
-    wabc: './assets/demo-water.wabc',
-    view: { ...rockyView, frameScene: true },
-    volume: true,
-  },
-  particlesVolume: {
-    name: 'Rocky particles (volume)',
-    scene: './assets/demo-rock.glb',
-    wabc: './assets/demo-particles.wabc',
-    view: { ...rockyView, frameScene: true },
-    volume: true,
   },
   fountainLiquid: {
     name: 'Fountain (liquid)',
@@ -555,13 +533,13 @@ const demos = {
     view: { ...rockyView, frameScene: true },
     volume: liquidSettings,
   },
-  // NOTE A particle is about one texel. More smooth passes and a lower level join the particles into one surface.
+  // NOTE A particle is about one texel. A lower level joins the particles into one surface.
   particlesLiquid: {
     name: 'Rocky particles (liquid)',
     scene: './assets/demo-rock.glb',
     wabc: './assets/demo-particles.wabc',
     view: { ...rockyView, frameScene: true },
-    volume: { ...liquidSettings, smooth: 2, surfaceLevel: 0.25 },
+    volume: { ...liquidSettings, surfaceLevel: 0.25 },
   },
 };
 
@@ -653,7 +631,7 @@ const loadDemo = (id) => {
             ? loadVolumeAnimation(
                 bytes,
                 { scene: targetScene, camera, renderer, setRenderFrame },
-                volume === true ? {} : volume
+                volume
               )
             : new WABCLoader().parse(new WabcFile(bytes))
         ),
@@ -715,7 +693,7 @@ export const exampleABC = ({ scene }) => {
       }
     }
 
-    // NOTE A volume shows a grid that gets ready while paused
+    // NOTE A liquid shows a grid that gets ready while paused
     if (model?.isVolumeAnimation && !model.playing) {
       model.update(0.0);
     }

@@ -1,5 +1,4 @@
-// NOTE Density grids of .wabc tracks: a cube of resolution^3 bytes, x first, in a world box.
-// Raw data for FrameVolume.
+// NOTE Density grids of .wabc tracks for the liquid views: a cube of resolution^3 bytes, x first, in a world box
 
 // NOTE Box that is a cube around min and max, with the same center
 const toCube = (min, max) => {
@@ -12,8 +11,7 @@ const toCube = (min, max) => {
   };
 };
 
-// NOTE Surface track: grid nodes centered in a cube of the longest grid side.
-// At a lower resolution, a texel is the mean of its nodes.
+// NOTE Surface track: grid nodes centered in a cube of the longest grid side
 export const getSurfaceLayout = ({ grid, volume }, maxResolution) => {
   const side = Math.max(...volume.size);
   const resolution = Math.min(side, maxResolution);
@@ -22,32 +20,27 @@ export const getSurfaceLayout = ({ grid, volume }, maxResolution) => {
     (axis) => grid.origin[axis] + (volume.first[axis] - pad[axis] - 0.5) * grid.spacing[axis]
   );
   const max = min.map((value, axis) => value + side * grid.spacing[axis]);
-  // NOTE Texel of each node on each axis, and the count of cube nodes in each texel on each axis
+  // NOTE Texel of each node on each axis
   const texels = volume.size.map((size, axis) =>
     Int32Array.from({ length: size }, (_, node) =>
       Math.floor(((node + pad[axis]) * resolution) / side)
     )
   );
-  const binSize = new Float32Array(resolution);
 
-  for (let node = 0; node < side; node++) {
-    binSize[Math.floor((node * resolution) / side)]++;
-  }
-
-  return { resolution, size: volume.size, texels, binSize, bbox: { min, max } };
+  return { resolution, size: volume.size, texels, bbox: { min, max } };
 };
 
-// NOTE Sign 1 is inside. Density 255: all nodes of the texel are inside.
-// Blocks with state 0 are all outside and are not read.
+// NOTE Sign 1 is inside. Density 255: a node of the texel is inside. A mean of the nodes removes liquid thinner
+// NOTE than half a texel. Blocks with state 0 are all outside and are not read.
 export const surfaceToDensity = (
   { signs, blockStates },
   blockSize,
-  { resolution, size, texels, binSize }
+  { resolution, size, texels }
 ) => {
   const [nx, ny, nz] = size;
   const [tx, ty, tz] = texels;
   const plane = resolution * resolution;
-  const inside = new Float32Array(plane * resolution);
+  const density = new Uint8Array(plane * resolution);
   let block = 0;
 
   for (let bz = 0; bz < nz; bz += blockSize) {
@@ -67,22 +60,12 @@ export const surfaceToDensity = (
             const row = ty[y] * resolution + tz[z] * plane;
 
             for (let x = bx; x < ex; x++) {
-              inside[row + tx[x]] += signs[source + x];
+              if (signs[source + x]) {
+                density[row + tx[x]] = 255;
+              }
             }
           }
         }
-      }
-    }
-  }
-
-  const density = new Uint8Array(inside.length);
-
-  for (let z = 0, index = 0; z < resolution; z++) {
-    for (let y = 0; y < resolution; y++) {
-      const rowSize = binSize[y] * binSize[z];
-
-      for (let x = 0; x < resolution; x++, index++) {
-        density[index] = Math.round((inside[index] / (rowSize * binSize[x])) * 255.0);
       }
     }
   }

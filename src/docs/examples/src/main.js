@@ -19,7 +19,6 @@ export const renderer =
     : new WebGPURenderer({
         antialias: true,
         forceWebGL: new URLSearchParams(window.location.search).has('webgl'),
-        trackTimestamp: true,
       });
 export const controls = new OrbitControls(camera, renderer.domElement);
 
@@ -54,54 +53,11 @@ const init = () => {
   });
 };
 
-// NOTE Sums since the last read
-const renderTimes = { frames: 0, cpuTime: 0.0, gpuFrames: 0, gpuTime: 0.0, gpuPending: false };
-let framesToResolve = 0;
-
-// NOTE Mean CPU and GPU milliseconds of a frame since the last call. null: no data, or no timestamp queries.
-export const readRenderTimes = () => {
-  const { frames, cpuTime, gpuFrames, gpuTime } = renderTimes;
-
-  Object.assign(renderTimes, { frames: 0, cpuTime: 0.0, gpuFrames: 0, gpuTime: 0.0 });
-
-  return {
-    cpuTime: frames ? cpuTime / frames : null,
-    gpuTime: gpuFrames ? gpuTime / gpuFrames : null,
-  };
-};
-
-// NOTE The query pool keeps the passes of all frames since the last resolve. Only one resolve runs at a time.
-const resolveGpuTime = () => {
-  framesToResolve++;
-
-  if (!renderer.backend?.trackTimestamp || renderTimes.gpuPending) {
-    return;
-  }
-
-  const frames = framesToResolve;
-
-  framesToResolve = 0;
-  renderTimes.gpuPending = true;
-  renderer.resolveTimestampsAsync().then((time) => {
-    renderTimes.gpuPending = false;
-
-    if (Number.isFinite(time)) {
-      renderTimes.gpuTime += time;
-      renderTimes.gpuFrames += frames;
-    }
-  });
-};
-
 const animate = () => {
   stats.begin();
 
-  const start = performance.now();
-
   controls.update();
   renderFrame();
-  renderTimes.cpuTime += performance.now() - start;
-  renderTimes.frames++;
-  resolveGpuTime();
 
   stats.end();
 };
