@@ -13,10 +13,10 @@ export const loaders = {
 const backgroundSize = isPhone ? '4K' : '8K';
 
 // NOTE These environments have no JPEG background. The UltraHDR file is also the background.
-const ultraHdrBackgrounds = ['night'];
+const ultraHdrBackgrounds = ['night', 'sky-midday', 'sky-dusk', 'sky-cloudy', 'sky-night'];
 
-// NOTE The UltraHDR files are brighter than the JPEG backgrounds
-const ultraHdrIntensity = 0.4;
+// NOTE The UltraHDR files are brighter than the JPEG backgrounds. The sky files (three-environment-shadows) are not.
+const getUltraHdrIntensity = (name) => (name.startsWith('sky-') ? 1.0 : 0.4);
 
 // NOTE A newer environment cancels an older one that is still loading
 let environmentId = 0;
@@ -34,6 +34,7 @@ const replaceTexture = (scene, key, texture) => {
 export const loadEnvironment = (scene, name) => {
   const currentId = ++environmentId;
   const useUltraHdrBackground = ultraHdrBackgrounds.includes(name);
+  const ultraHdrIntensity = getUltraHdrIntensity(name);
 
   loaders.ultraHdr.load(`./assets/${name}-HDR.jpg`, (env) => {
     if (currentId !== environmentId) {

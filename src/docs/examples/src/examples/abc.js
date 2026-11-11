@@ -2,10 +2,11 @@ import * as Three from 'three';
 import { WabcFile, loadAlembic, loadWabc } from 'alembic-web';
 import { ABCLoader, WABCLoader, createVertexAnimationMaterial } from 'three-alembic';
 import { SimpleDropzone } from 'simple-dropzone';
-import { camera, controls } from '../main';
+import { camera, controls, renderer, setRenderFrame } from '../main';
 import { dropTarget, getController, setGuiFields } from '../utils/gui';
 import { fetchWithProgress, setLoading, setLoadingProgress } from '../utils/loading';
 import { loadEnvironment, loaders } from '../utils/resources';
+import { getVolumeFields, loadVolumeAnimation } from '../utils/volumeAnimation';
 
 let targetScene, model;
 // NOTE The .abc file dropped with a .wabc file, to compare them
@@ -14,7 +15,8 @@ let reference = null;
 let demoScene = null;
 let dropId = 0;
 
-const isAnimation = (object) => object?.isABCAnimation || object?.isWABCAnimation;
+const isAnimation = (object) =>
+  object?.isABCAnimation || object?.isWABCAnimation || object?.isVolumeAnimation;
 
 const params = {
   playing: true,
@@ -22,8 +24,8 @@ const params = {
   fps: 24,
   loop: true,
   frame: 0,
-  demo: 'fountain',
-  environment: 'uv-1',
+  demo: 'fountainLiquid',
+  environment: 'sky-dusk',
   display: 'water',
   compare: 'wabc',
   errorScale: 1.0,
@@ -409,6 +411,7 @@ const showGui = () => {
   setGuiFields([
     ...(isAnimation(model) ? getPlaybackFields() : []),
     ...(reference ? getCompareFields() : []),
+    ...(model?.isVolumeAnimation ? getVolumeFields(model) : []),
     {
       folder: 'Scene',
       children: [
@@ -423,7 +426,14 @@ const showGui = () => {
           id: 'environment',
           name: 'EnvMap',
           defaultValue: params.environment,
-          options: { 'Night Realistic': 'night', UV: 'uv-1' },
+          options: {
+            'Sky Midday': 'sky-midday',
+            'Sky Dusk': 'sky-dusk',
+            'Sky Cloudy': 'sky-cloudy',
+            'Sky Night': 'sky-night',
+            'Night Realistic': 'night',
+            UV: 'uv-1',
+          },
           onChange: (value) => {
             params.environment = value;
             loadEnvironment(targetScene, value);
@@ -447,11 +457,15 @@ const showGui = () => {
 const showModel = (group, referenceGroup = null, view = defaultView) => {
   model = group;
   reference = referenceGroup;
-  model.traverse((child) => {
-    if (child.isMesh) {
-      originalMaterials.set(child, child.material);
-    }
-  });
+
+  // NOTE A liquid keeps its own materials
+  if (!model.isVolumeAnimation) {
+    model.traverse((child) => {
+      if (child.isMesh) {
+        originalMaterials.set(child, child.material);
+      }
+    });
+  }
 
   if (reference) {
     reference.traverse((child) => {
@@ -481,29 +495,58 @@ const showModel = (group, referenceGroup = null, view = defaultView) => {
 const readAbc = (url) => loadAlembic(url).then((reader) => new ABCLoader().parse(reader));
 const readWabc = (url) => loadWabc(url).then((file) => new WABCLoader().parse(file));
 
-// NOTE Demos: a .wabc animation in a static scene.
-// A dropped file stays in the scene of the demo.
+// NOTE The file material is transparent. The water refraction does not show transparent objects.
+const fountainMaterial = (original) =>
+  new Three.MeshStandardMaterial({
+    map: original.map,
+    roughness: 0.85,
+    metalness: 0.0,
+    side: 2,
+    transparent: false,
+  });
+
+const rockyView = { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 };
+
+const liquidSettings = { tintDistance: 0.6 };
+
+// NOTE Demos: a .wabc animation in a static scene. A dropped file stays in the scene of the demo.
+// NOTE "volume": settings of the liquid view (volumeAnimation.js). The demo shows the file as a liquid.
 const demos = {
   fountain: {
     name: 'Fountain',
     scene: './assets/fountain.glb',
     wabc: './assets/flow.wabc',
     view: { ...defaultView, frameScene: true },
-    // NOTE The file material is transparent. The water refraction does not show transparent objects.
-    material: (original) =>
-      new Three.MeshStandardMaterial({
-        map: original.map,
-        roughness: 0.85,
-        metalness: 0.0,
-        side: 2,
-        transparent: false,
-      }),
+    material: fountainMaterial,
   },
   rocky: {
     name: 'Rocky',
     scene: './assets/demo-rock.glb',
     wabc: './assets/demo-water.wabc',
-    view: { direction: new Three.Vector3(1.0, 0.7, -1.0), height: 1.0 },
+    view: rockyView,
+  },
+  fountainLiquid: {
+    name: 'Fountain (liquid)',
+    scene: './assets/fountain.glb',
+    wabc: './assets/flow.wabc',
+    view: { ...defaultView, frameScene: true },
+    material: fountainMaterial,
+    volume: liquidSettings,
+  },
+  rockyLiquid: {
+    name: 'Rocky (liquid)',
+    scene: './assets/demo-rock.glb',
+    wabc: './assets/demo-water.wabc',
+    view: { ...rockyView, frameScene: true },
+    volume: liquidSettings,
+  },
+  // NOTE A particle is about one texel. A lower level joins the particles into one surface.
+  particlesLiquid: {
+    name: 'Rocky particles (liquid)',
+    scene: './assets/demo-rock.glb',
+    wabc: './assets/demo-particles.wabc',
+    view: { ...rockyView, frameScene: true },
+    volume: { ...liquidSettings, surfaceLevel: 0.25 },
   },
 };
 
@@ -566,7 +609,7 @@ const loadFiles = ({ abcFile, wabcFile }) => {
 
 // NOTE The demo files are large. The loading indicator shows the download progress of the .wabc file.
 const loadDemo = (id) => {
-  const { scene, wabc, view, material } = demos[id];
+  const { scene, wabc, view, material, volume } = demos[id];
 
   // NOTE "material" makes the material of each mesh of the demo scene from the file material
   const readScene = (gltf) => {
@@ -591,7 +634,13 @@ const loadDemo = (id) => {
       Promise.all([
         null,
         fetchWithProgress(wabc, setLoadingProgress).then((bytes) =>
-          new WABCLoader().parse(new WabcFile(bytes))
+          volume
+            ? loadVolumeAnimation(
+                bytes,
+                { scene: targetScene, camera, renderer, setRenderFrame },
+                volume
+              )
+            : new WABCLoader().parse(new WabcFile(bytes))
         ),
         loaders.gltf.loadAsync(scene).then(readScene),
       ]),
@@ -649,6 +698,11 @@ export const exampleABC = ({ scene }) => {
         params.playing = false;
         setFieldValue('playing', false);
       }
+    }
+
+    // NOTE A liquid shows a grid that gets ready while paused
+    if (model?.isVolumeAnimation && !model.playing) {
+      model.update(0.0);
     }
 
     // NOTE The reference follows the time of the .wabc file

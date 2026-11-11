@@ -26,17 +26,25 @@ const toKey = (cells) => {
   return key;
 };
 
+// NOTE Every third bit of a 30-bit integer, from bit 0, to the low 10 bits
+const compactBits = (value) => {
+  value &= 0x09249249;
+  value = (value ^ (value >>> 2)) & 0x030c30c3;
+  value = (value ^ (value >>> 4)) & 0x0300f00f;
+  value = (value ^ (value >>> 8)) & 0xff0000ff;
+
+  return (value ^ (value >>> 16)) & 0x3ff;
+};
+
+// NOTE Key bits 0-29 give cell bits 0-9. Key bits 30-50 give cell bits 10-16. Each part is a 32-bit integer.
+const keySplit = 2 ** 30;
+
 const fromKey = (key, cells) => {
-  cells[0] = 0;
-  cells[1] = 0;
-  cells[2] = 0;
+  const low = key % keySplit;
+  const high = Math.floor(key / keySplit);
 
-  for (let bit = 0; bit < 17; bit++) {
-    for (let axis = 0; axis < 3; axis++) {
-      const value = Math.floor(key / 2 ** (3 * bit + axis)) % 2;
-
-      cells[axis] |= value << bit;
-    }
+  for (let axis = 0; axis < 3; axis++) {
+    cells[axis] = compactBits(low >>> axis) | (compactBits(high >>> axis) << 10);
   }
 
   return cells;

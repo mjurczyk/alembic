@@ -27,6 +27,14 @@ document.querySelector('.package-version').innerHTML = `v${packageInfo.version}`
 const stats = new Stats();
 document.body.appendChild(stats.dom);
 
+const renderScene = () => renderer.render(scene, camera);
+let renderFrame = renderScene;
+
+// NOTE An example can draw each frame with its own function, for example with a RenderPipeline. null: the default.
+export const setRenderFrame = (render) => {
+  renderFrame = render ?? renderScene;
+};
+
 const init = () => {
   camera.position.set(-10.0, 8.0, 8.0);
 
@@ -49,7 +57,7 @@ const animate = () => {
   stats.begin();
 
   controls.update();
-  renderer.render(scene, camera);
+  renderFrame();
 
   stats.end();
 };
