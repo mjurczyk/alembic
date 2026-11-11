@@ -8,7 +8,7 @@ let workerUrl = null;
 const getWorkerUrl = () =>
   (workerUrl ??= URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' })));
 
-export const getPointsWorkerCount = () =>
+const getPointsWorkerCount = () =>
   Math.min(Math.max((navigator.hardwareConcurrency ?? 2) - 1, 1), 6);
 
 class VolumeWorker {

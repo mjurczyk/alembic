@@ -13,8 +13,8 @@ const createLiquidView =
 
 // NOTE Values of the liquid view. Each demo starts from defaultParams and its own settings.
 const params = {
-  resolution: 64,
-  smooth: 1,
+  resolution: 100,
+  smooth: 2,
   // NOTE Color of the light after "tintDistance" world units in the liquid
   color: '#bfe6ff',
   tintDistance: 1.0,
@@ -27,7 +27,7 @@ const params = {
 
 const defaultParams = { ...params };
 
-export class VolumeAnimation extends Three.Group {
+class VolumeAnimation extends Three.Group {
   isVolumeAnimation = true;
   playing = false;
   loop = true;
@@ -196,7 +196,7 @@ export const getVolumeFields = (animation) => {
       folder: 'Liquid',
       children: [
         ...[
-          ['resolution', 'Resolution', 32, 256, 16],
+          ['resolution', 'Resolution', 32, 256, 4],
           ['smooth', 'Smooth passes', 0, 3, 1],
         ].map(([id, name, min, max, step]) => ({
           id,

@@ -76,7 +76,6 @@ const configure = (resolution) => {
 
 const readSample = async ({ sample, smooth }) => {
   const { kind, track, layout, box, resolution } = context;
-  const decodeStart = performance.now();
   let decoded;
   let position;
 
@@ -86,7 +85,6 @@ const readSample = async ({ sample, smooth }) => {
     position = (await track.readSample(sample)).position;
   }
 
-  const gridStart = performance.now();
   const density = smoothDensity(
     kind === 'surface'
       ? surfaceToDensity(decoded, surfaceBlockSize, layout)
@@ -95,16 +93,12 @@ const readSample = async ({ sample, smooth }) => {
     smooth
   );
   const coarse = getCoarseGrid(density, resolution);
-  const end = performance.now();
 
   return {
     sample,
     resolution,
     density,
     coarse,
-    count: kind === 'surface' ? decoded.edges.length : position.length / 3,
-    decodeTime: gridStart - decodeStart,
-    gridTime: end - gridStart,
   };
 };
 

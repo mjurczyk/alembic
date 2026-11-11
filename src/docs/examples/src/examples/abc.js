@@ -25,7 +25,7 @@ const params = {
   loop: true,
   frame: 0,
   demo: 'fountainLiquid',
-  environment: 'uv-1',
+  environment: 'sky-dusk',
   display: 'water',
   compare: 'wabc',
   errorScale: 1.0,
@@ -426,7 +426,14 @@ const showGui = () => {
           id: 'environment',
           name: 'EnvMap',
           defaultValue: params.environment,
-          options: { 'Night Realistic': 'night', UV: 'uv-1' },
+          options: {
+            'Sky Midday': 'sky-midday',
+            'Sky Dusk': 'sky-dusk',
+            'Sky Cloudy': 'sky-cloudy',
+            'Sky Night': 'sky-night',
+            'Night Realistic': 'night',
+            UV: 'uv-1',
+          },
           onChange: (value) => {
             params.environment = value;
             loadEnvironment(targetScene, value);
