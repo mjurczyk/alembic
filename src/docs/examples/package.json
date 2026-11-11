@@ -17,7 +17,7 @@
     "vite": "^6.4.5"
   },
   "dependencies": {
-    "alembic-web": "^0.3.0",
-    "three-alembic": "^0.3.0"
+    "alembic-web": "^0.4.0",
+    "three-alembic": "^0.4.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "three-alembic",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "three.js rendering of Alembic (.abc) and .wabc files: loaders, animation, vertex animation materials.",
   "main": "./index.js",
   "module": "./index.js",
@@ -12,7 +12,7 @@
     "build": "rollup --config ./rollup.config.js"
   },
   "dependencies": {
-    "alembic-web": "^0.3.0"
+    "alembic-web": "^0.4.0"
   },
   "peerDependencies": {
     "three": ">=0.162.0"

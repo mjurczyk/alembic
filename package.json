@@ -1,6 +1,6 @@
 {
   "name": "alembic-workspace",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Alembic for JavaScript: alembic-web (core .abc and .wabc reader), three-alembic (three.js rendering), webabc (.abc -> .wabc CLI).",
   "workspaces": [
